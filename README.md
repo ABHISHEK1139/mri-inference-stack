@@ -142,7 +142,7 @@ It intentionally excludes heavy transient artifacts:
 - [docs/dataset.md](docs/dataset.md)
 - [docs/innovation.md](docs/innovation.md)
 - [docs/research_extensions.md](docs/research_extensions.md)
-- [docs/cern_tsc_alignment.md](docs/cern_tsc_alignment.md)
+- [docs/system-design.md](docs/system-design.md)
 - [docs/reproducibility_runbook.md](docs/reproducibility_runbook.md)
 - [ansible/README.md](ansible/README.md)
 - [k8s/README.md](k8s/README.md)

@@ -96,7 +96,7 @@ GAN_NOISE_STD = 0.1
 FID_BATCH_SIZE = 64
 FS_BATCH_SIZE = 64
 
-PROJECT_NAME = "MRI-Sync End-to-End Pipeline"
+PROJECT_NAME = "MRI Inference Stack"
 FLAGSHIP_TRACKS = ("detection", "classifier")
 EXPERIMENTAL_TRACKS = ("segmentation", "gan")
 

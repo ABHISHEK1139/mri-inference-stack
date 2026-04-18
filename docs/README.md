@@ -9,12 +9,12 @@
 
 ## Portfolio and Operations
 
-- [cern_tsc_alignment.md](cern_tsc_alignment.md)
+- [system-design.md](system-design.md)
 - [reproducibility_runbook.md](reproducibility_runbook.md)
 
 ## Suggested Reading Order
 
-1. `cern_tsc_alignment.md`
+1. `system-design.md`
 2. `architecture_diagrams.md`
 3. `reproducibility_runbook.md`
 4. `innovation.md`

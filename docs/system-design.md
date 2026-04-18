@@ -1,32 +1,32 @@
-# CERN TSC-2026-3/CO Alignment Dossier
+# System Design and Deployment Architecture
 
-## Positioning Statement
+## Architecture Overview
 
-This repository is positioned as a compact, operations-ready AI system that demonstrates the exact blend of skills expected in the CERN Technical Studentship IT, Mathematics, and Robotics track:
+This repository is positioned as a compact, operations-ready AI system that demonstrates a rigorous blend of skills expected in enterprise and scientific machine learning environments:
 
 - strong software engineering in Python and TensorFlow
 - reproducible infrastructure using Docker, Ansible, and Kubernetes
 - quantitative model evaluation with explicit threshold calibration and metric tracking
 - disciplined separation between flagship deliverables and research extensions
 
-## Pillar-to-Evidence Mapping
+## Core Engineering Pillars
 
-| CERN pillar | What CERN evaluates | Evidence in this repo |
+| Engineering Pillar | What it evaluates | Evidence in this repo |
 | --- | --- | --- |
-| IT and software engineering | Maintainable code, deployment maturity, observability, and portability | Modular track-based architecture, Streamlit application, Docker image, Docker Compose stack, Ansible playbook, Kubernetes manifests with probes and resources |
+| Software engineering | Maintainable code, deployment maturity, observability, and portability | Modular track-based architecture, Streamlit application, Docker image, Docker Compose stack, Ansible playbook, Kubernetes manifests with probes and resources |
 | Mathematics and data science | Statistical rigor, calibration choices, metric transparency, and reproducibility | Detection threshold calibration, balanced accuracy/specificity reporting, classifier metrics, segmentation Dice/IoU evaluation, FID/FS GAN quality logging |
-| Robotics and industrial control relevance | Reliability under constraints, safety-aware operation, clear operational interfaces | Low-VRAM profile support, deterministic preflight checks, explicit runtime health checks, and automation-first deployment workflows |
+| Systems and reliability | Reliability under constraints, safety-aware operation, clear operational interfaces | Low-VRAM profile support, deterministic preflight checks, explicit runtime health checks, and automation-first deployment workflows |
 
-## What to Highlight in the Application
+## Key Technical Highlights
 
-1. Demonstrate end-to-end ownership
-- You built the model pipeline, the deployment path, and the operations runbook.
+1. End-to-end ownership
+- The model pipeline, deployment path, and operations runbook are tightly integrated.
 
-2. Show engineering judgment
-- You narrowed the public promise to the strongest validated workflow while keeping exploratory tracks clearly labeled.
+2. Engineering judgment
+- The public promise is narrowed to the strongest validated workflow while exploratory tracks are clearly labeled.
 
-3. Emphasize reproducibility
-- You can run the same project locally, through Docker, with Ansible, or in Kubernetes with consistent behavior.
+3. Reproducibility
+- The project runs consistently locally, through Docker, with Ansible, or in Kubernetes.
 
 4. Quantify decisions
 - You do not rely on raw probability only; you save and apply calibrated operating thresholds with explicit metrics.

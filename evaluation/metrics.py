@@ -4,7 +4,10 @@ confusion matrix, classification reports, and segmentation metrics.
 """
 import os
 import numpy as np
-import tensorflow as tf
+try:
+    import tensorflow as tf
+except ModuleNotFoundError:
+    tf = None
 from scipy import linalg
 from sklearn.metrics import (
     confusion_matrix, classification_report, accuracy_score,
@@ -22,6 +25,9 @@ def build_inception_feature_extractor():
     """Build InceptionV3 model for feature extraction.
     Uses pretrained ImageNet weights for meaningful feature representations.
     """
+    if tf is None:
+        raise ImportError("TensorFlow is required for FID feature extraction.")
+
     inception = tf.keras.applications.InceptionV3(
         include_top=False,
         pooling='avg',
@@ -124,6 +130,9 @@ def calculate_fs(real_images, generated_images, batch_size=64):
 
 def _build_medical_feature_extractor(input_shape):
     """Build a simple CNN feature extractor for medical images."""
+    if tf is None:
+        raise ImportError("TensorFlow is required for FS feature extraction.")
+
     inputs = tf.keras.Input(shape=input_shape)
     x = tf.keras.layers.Conv2D(32, 3, activation='relu', padding='same')(inputs)
     x = tf.keras.layers.MaxPooling2D()(x)

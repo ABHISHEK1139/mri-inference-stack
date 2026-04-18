@@ -127,6 +127,42 @@ def _check_command_available(command: str, version_args: Iterable[str], required
     )
 
 
+def _check_command_available_variants(
+    command: str,
+    version_args_variants: Iterable[Iterable[str]],
+    required: bool,
+) -> CheckResult:
+    command_path = shutil.which(command)
+    if command_path is None:
+        status = STATUS_FAIL if required else STATUS_WARN
+        return CheckResult(
+            name=f"command-{command}",
+            status=status,
+            details="not found in PATH",
+            required=required,
+        )
+
+    last_detail = "unknown error"
+    for version_args in version_args_variants:
+        ok, detail = _run_command([command, *version_args])
+        if ok:
+            return CheckResult(
+                name=f"command-{command}",
+                status=STATUS_PASS,
+                details=detail,
+                required=required,
+            )
+        last_detail = detail
+
+    status = STATUS_FAIL if required else STATUS_WARN
+    return CheckResult(
+        name=f"command-{command}",
+        status=status,
+        details=last_detail,
+        required=required,
+    )
+
+
 def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
     root = Path(__file__).resolve().parent.parent
 
@@ -177,7 +213,17 @@ def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
     if not args.ci_mode:
         checks.append(_check_command_available("git", ["--version"], required=False))
         checks.append(_check_command_available("docker", ["--version"], required=False))
-        checks.append(_check_command_available("kubectl", ["version", "--client", "--short"], required=False))
+        checks.append(
+            _check_command_available_variants(
+                "kubectl",
+                [
+                    ["version", "--client", "--short"],
+                    ["version", "--client"],
+                    ["version"],
+                ],
+                required=False,
+            )
+        )
 
     return checks
 
