@@ -1,0 +1,22 @@
+{
+  "threshold": 0.225,
+  "validation_metrics": {
+    "accuracy": 0.9812819058423142,
+    "precision": 0.9939106901217862,
+    "recall": 0.9839249832551908,
+    "specificity": 0.9666666666666667,
+    "balanced_accuracy": 0.9752958249609287,
+    "f1_score": 0.9888926287445304,
+    "confusion_matrix": [
+      [
+        261,
+        9
+      ],
+      [
+        24,
+        1469
+      ]
+    ],
+    "threshold": 0.225
+  }
+}

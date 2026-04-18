@@ -1,0 +1,40 @@
+# Version Control
+.git
+.gitignore
+.gitattributes
+
+# Python Built-ins
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+.venv-wsl/
+venv/
+env/
+
+# Caches & Logs
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/
+
+# Data & Checkpoints
+data/raw/
+data/processed/
+checkpoints/
+
+# Infrastructure & Documentation
+docs/
+ansible/
+k8s/
+One_Page_Dataset.docx
+One_Page_Innovation.docx
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+

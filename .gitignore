@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+.venv-wsl/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local data artifacts
+data/raw/
+data/processed/
+# Keep curated outputs in git; ignore transient scratch files only
+outputs/tmp/
+outputs/cache/
+
+# Training artifacts
+checkpoints/
+logs/
+
+# Weights
+# Keep deployment weights in git (LFS-managed in .gitattributes)
+
+# Office docs and local notes
+*.docx
+*.pptx
+*.xlsx
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
