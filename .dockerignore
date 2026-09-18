@@ -1,0 +1,54 @@
+# Version Control
+.git
+.gitignore
+.gitattributes
+
+# Python Built-ins
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+.venv-wsl/
+venv/
+env/
+
+# Caches & Logs
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+logs/
+
+# Data & Checkpoints
+data/raw/
+data/processed/
+checkpoints/
+
+# Training code (not needed for inference)
+train.py
+training/
+
+# Tests (not needed in production image)
+tests/
+requirements-dev.txt
+pyproject.toml
+CONTRIBUTING.md
+
+# Infrastructure & Documentation
+.github/
+docs/
+ansible/
+k8s/
+One_Page_Dataset.docx
+One_Page_Innovation.docx
+
+# Outputs (regenerated at runtime)
+outputs/
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+

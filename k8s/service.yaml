@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mri-intelligence-service
+  namespace: mri-intelligence
+spec:
+  selector:
+    app: mri-intelligence
+  ports:
+    - protocol: TCP
+      port: 8501
+      targetPort: 8501
+  type: NodePort
+

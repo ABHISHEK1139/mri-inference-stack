@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mri-intelligence-config
+  namespace: mri-intelligence
+data:
+  LOW_VRAM_MODE: "1"
+  GPU_MEMORY_GB: "4"
+  STREAMLIT_SERVER_HEADLESS: "true"
+  STREAMLIT_BROWSER_GATHER_USAGE_STATS: "false"
+

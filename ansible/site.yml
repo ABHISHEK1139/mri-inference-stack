@@ -1,0 +1,33 @@
+---
+- name: Provision and run Brain MRI Intelligence System
+  hosts: local
+  become: false
+  vars:
+    repo_path: "{{ playbook_dir | dirname }}"
+  tasks:
+    - name: Check if docker is available
+      ansible.builtin.command: docker --version
+      changed_when: false
+
+    - name: Check if docker compose plugin is available
+      ansible.builtin.command: docker compose version
+      changed_when: false
+
+    - name: Check if git lfs is available
+      ansible.builtin.command: git lfs version
+      changed_when: false
+
+    - name: Pull Git LFS artifacts (weights)
+      ansible.builtin.command: git lfs pull
+      args:
+        chdir: "{{ repo_path }}"
+
+    - name: Build and start the Streamlit stack
+      ansible.builtin.command: docker compose up -d --build
+      args:
+        chdir: "{{ repo_path }}"
+
+    - name: Show running app URL
+      ansible.builtin.debug:
+        msg: "Brain MRI app is running at http://localhost:8501"
+

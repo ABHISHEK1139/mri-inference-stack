@@ -1,0 +1,60 @@
+name: Quality Checks
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  lint-and-preflight:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Python compile smoke check
+        run: python -m compileall app.py train.py config.py data models training evaluation scripts
+
+      - name: Preflight structural check
+        run: python scripts/preflight.py --ci-mode
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Model construction smoke test
+        run: |
+          python -c "
+          from models.detection import build_detection_model
+          m = build_detection_model()
+          assert m.output_shape == (None, 1), f'Detection: {m.output_shape}'
+          print('Detection model: OK')
+          "
+          python -c "
+          from models.classifier import build_classifier
+          m = build_classifier()
+          assert m.output_shape == (None, 4), f'Classifier: {m.output_shape}'
+          print('Classifier model: OK')
+          "
+          python -c "
+          from models.segmentation import build_unet
+          m = build_unet(input_shape=(128, 128, 1))
+          assert m.output_shape == (None, 128, 128, 1), f'Segmentation: {m.output_shape}'
+          print('Segmentation model: OK')
+          "
+
+      - name: Run unit tests
+        run: python -m pytest tests/ -v --tb=short
