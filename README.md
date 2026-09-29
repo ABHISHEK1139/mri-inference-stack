@@ -113,13 +113,31 @@ App URL: `http://localhost:8501`
 
 ## Docker Run
 
-The multi-stage Docker build includes build-time Git LFS validation to ensure complete model artifacts:
+The multi-stage build installs from `requirements.lock`, validates the Git LFS
+artifacts at build time, and produces an image that runs as UID `10001` with a
+read-only root filesystem:
 
 ```powershell
 docker compose up -d --build
 ```
 
 App URL: `http://localhost:8501`
+
+Two build variants are available. The pinned `tensorflow` wheel bundles CUDA,
+which accounts for most of the size difference; both variants run the same
+TensorFlow version and produce identical CPU predictions:
+
+| Variant | Command | Size |
+| --- | --- | --- |
+| GPU-capable (default) | `docker compose up -d --build` | ~4.4 GB |
+| CPU-only | `docker build --build-arg TENSORFLOW_DIST=tensorflow-cpu -t mri .` | ~3.3 GB |
+
+Verify a running instance:
+
+```powershell
+docker compose ps                                     # expect "(healthy)"
+docker compose exec mri-app python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health').status)"
+```
 
 ## Ansible Automation
 
@@ -134,9 +152,17 @@ This playbook performs dependency verification, pulls Git LFS artifacts, and sta
 ```bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/networkpolicy.yaml
 kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/pdb.yaml
 ```
+
+The pod runs non-root with a read-only root filesystem, a `/tmp` emptyDir for
+Streamlit, a default-deny network policy, and a disruption budget. The image tag
+is versioned rather than `:latest`, so a rollout is explicit and reversible. See
+[`k8s/README.md`](k8s/README.md) for the full security posture and for how to
+expose the `ClusterIP` service through an Ingress.
 
 > **Storage Configuration**: By default, the pod consumes model weights baked directly into the container image (`/app/weights`). The `outputs-volume` mount preserves runtime exports. To supply weights externally via cluster storage, uncomment the `weights-volume` PVC in [`k8s/deployment.yaml`](k8s/deployment.yaml).
 

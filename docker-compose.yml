@@ -1,11 +1,13 @@
-version: "3.9"
-
 services:
   mri-app:
     init: true
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # The pinned `tensorflow` wheel bundles CUDA and yields a ~4.4 GB image.
+        # For a CPU-only deployment, set this to `tensorflow-cpu` for ~3.3 GB.
+        TENSORFLOW_DIST: ${TENSORFLOW_DIST:-tensorflow}
     container_name: mri-intelligence-app
     ports:
       - "8501:8501"
@@ -14,9 +16,19 @@ services:
       - GPU_MEMORY_GB=4
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      # Streamlit needs a writable config dir; the container root is read-only
+      # in Kubernetes, so keep it aligned with the /tmp mount.
+      - STREAMLIT_CONFIG_DIR=/tmp/streamlit
     volumes:
-      - ./weights:/app/weights
+      - ./weights:/app/weights:ro
       - ./outputs:/app/outputs
+    # Scratch space for Streamlit. Required because the root filesystem is
+    # mounted read-only; sized to match the Kubernetes emptyDir.
+    tmpfs:
+      - /tmp:size=256m
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     healthcheck:
       test:
         [
@@ -30,4 +42,3 @@ services:
       retries: 5
       start_period: 40s
     restart: unless-stopped
-

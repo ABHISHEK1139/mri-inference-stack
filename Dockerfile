@@ -18,8 +18,20 @@ WORKDIR /build
 # versions the test suite was validated against. Floating ranges in a container
 # build are how "works on my machine" becomes "works until the next rebuild".
 COPY requirements.txt requirements.lock /build/
-RUN python -m pip install --upgrade pip \
-    && python -m pip install --require-hashes=false -r /build/requirements.lock
+
+# The pinned `tensorflow` wheel bundles CUDA and installs ~1.8 GB, giving a
+# ~4.4 GB image. CPU-only deployments do not need it: build with
+#   docker build --build-arg TENSORFLOW_DIST=tensorflow-cpu .
+# for a ~2.5 GB image. The version is identical either way, so the lock file
+# stays the single source of truth.
+ARG TENSORFLOW_DIST=tensorflow
+RUN if [ "$TENSORFLOW_DIST" = "tensorflow-cpu" ]; then \
+        sed 's/^tensorflow==/tensorflow-cpu==/' /build/requirements.lock > /build/resolved.txt; \
+    else \
+        cp /build/requirements.lock /build/resolved.txt; \
+    fi \
+    && grep -qi "^tensorflow" /build/resolved.txt \
+    && python -m pip install --no-cache-dir -r /build/resolved.txt
 
 # ── Runtime ──────────────────────────────────────────────────────────────
 FROM ${PYTHON_IMAGE}

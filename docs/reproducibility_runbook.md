@@ -106,6 +106,29 @@ docker compose up -d --build
 ansible-playbook -i ansible/inventory.ini ansible/site.yml
 ```
 
+### Container variants
+
+```powershell
+# GPU-capable (default, ~4.4 GB)
+docker build -t mri .
+
+# CPU-only (~3.3 GB)
+docker build --build-arg TENSORFLOW_DIST=tensorflow-cpu -t mri .
+```
+
+Both variants pin the same TensorFlow version from `requirements.lock`; only the
+CUDA payload differs. Verify either with:
+
+```powershell
+docker compose ps                                     # expect "(healthy)"
+docker compose exec mri-app id                        # uid=10001(app)
+docker compose exec mri-app python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health').status)"
+```
+
+The container runs as a non-root user against a read-only root filesystem, with
+`/tmp` provided as scratch space. That matches the Kubernetes manifests, so the
+same image is validated by the compose run.
+
 Kubernetes, in order:
 
 ```bash

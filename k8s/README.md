@@ -31,6 +31,12 @@ kubectl apply -f k8s/pdb.yaml
   egress, and the app port.
 - No GPU request by default; uncomment `nvidia.com/gpu` when needed.
 
+The image these settings assume has been verified: it builds from
+`requirements.lock`, runs as `uid=10001`, serves `/_stcore/health` under a
+read-only root filesystem, and loads every model from `/app/weights`. The
+`docker compose` configuration applies the same constraints, so a compose run
+exercises the same runtime assumptions without a cluster.
+
 ## Rollouts
 
 The image tag is versioned (`ghcr.io/ABHISHEK1139/mri-inference-stack:0.2.0`),
