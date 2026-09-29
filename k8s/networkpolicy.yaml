@@ -1,0 +1,58 @@
+# Deny-all baseline, then allow only the egress the app actually needs:
+# DNS for name resolution and HTTPS for model/weight downloads. A
+# default-deny ingress/egress policy is the single highest-leverage network
+# control in a namespace; without it any pod can reach any other service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mri-intelligence-default-deny
+  namespace: mri-intelligence
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mri-intelligence-allow-required
+  namespace: mri-intelligence
+spec:
+  podSelector:
+    matchLabels:
+      app: mri-intelligence
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the Streamlit port, from pods in this namespace. If an Ingress
+    # controller or load balancer fronts the Service, add its namespace here.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8501
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to the outside world (datasets, weight registries).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

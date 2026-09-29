@@ -3,12 +3,42 @@ kind: Service
 metadata:
   name: mri-intelligence-service
   namespace: mri-intelligence
+  labels:
+    app: mri-intelligence
 spec:
   selector:
     app: mri-intelligence
   ports:
     - protocol: TCP
       port: 8501
-      targetPort: 8501
-  type: NodePort
-
+      targetPort: http
+      name: http
+  # ClusterIP (the default) keeps the app off the node network. The previous
+  # NodePort exposed an unauthenticated inference endpoint on every node's IP.
+  # To reach it, front it with an Ingress that terminates TLS and auth:
+  #
+  #   apiVersion: networking.k8s.io/v1
+  #   kind: Ingress
+  #   metadata:
+  #     name: mri-intelligence
+  #     namespace: mri-intelligence
+  #     annotations:
+  #       nginx.ingress.kubernetes.io/auth-type: basic
+  #       nginx.ingress.kubernetes.io/auth-secret: mri-intelligence-auth
+  #   spec:
+  #     ingressClassName: nginx
+  #     tls:
+  #       - hosts: [mri.example.org]
+  #         secretName: mri-intelligence-tls
+  #     rules:
+  #       - host: mri.example.org
+  #         http:
+  #           paths:
+  #             - path: /
+  #               pathType: Prefix
+  #               backend:
+  #                 service:
+  #                   name: mri-intelligence-service
+  #                   port:
+  #                     number: 8501
+  type: ClusterIP

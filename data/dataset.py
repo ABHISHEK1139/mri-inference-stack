@@ -279,20 +279,27 @@ def _load_path_image_tf(
     return image
 
 
-def _shuffle(dataset: tf.data.Dataset, size: int, buffer_limit: int = 2048) -> tf.data.Dataset:
+def _shuffle(dataset: tf.data.Dataset, size: int, buffer_limit: int = 2048,
+            seed: int | None = None) -> tf.data.Dataset:
     """Shuffle with a valid buffer size.
 
     ``tf.data`` rejects ``buffer_size < 1`` with a ``ValueError``, which made
     every ``shuffle=True`` builder fail outright on an empty split instead of
     raising a meaningful error.
+
+    ``seed`` makes the shuffle order reproducible for a given TensorFlow version
+    and hardware; pass the run seed from :mod:`training.reproducibility`.
     """
     if size <= 0:
         raise ValueError(
             "Cannot build a tf.data.Dataset from an empty split. "
             "Check that the source dataset actually contains images for this partition."
         )
-    return dataset.shuffle(buffer_size=max(1, min(size, buffer_limit)),
-        reshuffle_each_iteration=True)
+    return dataset.shuffle(
+        buffer_size=max(1, min(size, buffer_limit)),
+        reshuffle_each_iteration=True,
+        seed=seed,
+    )
 
 
 def augment_image(image: tf.Tensor, mask: tf.Tensor | None = None):
@@ -721,11 +728,12 @@ def build_detection_dataset(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     dataset = tf.data.Dataset.from_tensor_slices((images.astype(np.float32), np.asarray(labels,
         dtype=np.float32)))
     if shuffle:
-        dataset = _shuffle(dataset, len(images))
+        dataset = _shuffle(dataset, len(images), seed=seed)
     if augment:
         dataset = dataset.map(lambda x, y: (augment_image(x), y),
             num_parallel_calls=tf.data.AUTOTUNE)
@@ -739,11 +747,12 @@ def build_detection_dataset_from_paths(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     labels = np.asarray(labels, dtype=np.float32)
     dataset = tf.data.Dataset.from_tensor_slices((list(paths), labels))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels))
+        dataset = _shuffle(dataset, len(labels), seed=seed)
     dataset = dataset.map(
         lambda path, label: (_load_path_image_tf(path, img_size=img_size), label),
         num_parallel_calls=tf.data.AUTOTUNE,
@@ -760,12 +769,13 @@ def build_classifier_dataset(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     labels = tf.one_hot(np.asarray(labels, dtype=np.int32), NUM_CLASSES,
         dtype=tf.float32)
     dataset = tf.data.Dataset.from_tensor_slices((images.astype(np.float32), labels))
     if shuffle:
-        dataset = _shuffle(dataset, len(images))
+        dataset = _shuffle(dataset, len(images), seed=seed)
     if augment:
         dataset = dataset.map(lambda x, y: (augment_image(x), y),
             num_parallel_calls=tf.data.AUTOTUNE)
@@ -779,11 +789,12 @@ def build_classifier_dataset_from_paths(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     labels = np.asarray(labels, dtype=np.int32)
     dataset = tf.data.Dataset.from_tensor_slices((list(paths), labels))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels))
+        dataset = _shuffle(dataset, len(labels), seed=seed)
     dataset = dataset.map(
         lambda path, label: (
             _load_path_image_tf(path,
@@ -869,11 +880,12 @@ def build_segmentation_dataset(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     dataset = tf.data.Dataset.from_tensor_slices((images.astype(np.float32),
         masks.astype(np.float32)))
     if shuffle:
-        dataset = _shuffle(dataset, len(images), buffer_limit=1024)
+        dataset = _shuffle(dataset, len(images), buffer_limit=1024, seed=seed)
     if augment:
         dataset = dataset.map(lambda x, y: augment_image(x, y), num_parallel_calls=tf.data.AUTOTUNE)
     return _finalize_dataset(dataset, batch_size=batch_size)
@@ -886,10 +898,11 @@ def build_segmentation_dataset_from_paths(
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     dataset = tf.data.Dataset.from_tensor_slices((list(img_paths), list(mask_paths)))
     if shuffle:
-        dataset = _shuffle(dataset, len(img_paths), buffer_limit=1024)
+        dataset = _shuffle(dataset, len(img_paths), buffer_limit=1024, seed=seed)
 
     def _load_pair(image_path: tf.Tensor, mask_path: tf.Tensor):
         image = _load_path_image_tf(image_path, img_size=img_size)
@@ -907,6 +920,7 @@ def build_gan_dataset(
     labels: Sequence[int] | None = None,
     batch_size: int = 32,
     shuffle: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     """Build a GAN dataset from in-memory images.
 
@@ -920,13 +934,13 @@ def build_gan_dataset(
     if labels is None:
         dataset = tf.data.Dataset.from_tensor_slices(images)
         if shuffle:
-            dataset = _shuffle(dataset, len(images))
+            dataset = _shuffle(dataset, len(images), seed=seed)
         return _finalize_dataset(dataset, batch_size=batch_size)
 
     label_vectors = tf.one_hot(np.asarray(labels, dtype=np.int32), NUM_CLASSES, dtype=tf.float32)
     dataset = tf.data.Dataset.from_tensor_slices((images, label_vectors))
     if shuffle:
-        dataset = _shuffle(dataset, len(images))
+        dataset = _shuffle(dataset, len(images), seed=seed)
     return _finalize_dataset(dataset, batch_size=batch_size)
 
 
@@ -936,12 +950,13 @@ def build_gan_dataset_from_paths(
     img_size: tuple[int, int] = (128, 128),
     batch_size: int = 32,
     shuffle: bool = True,
+    seed: int | None = None,
 ) -> tf.data.Dataset:
     paths = list(paths)
     if labels is None:
         dataset = tf.data.Dataset.from_tensor_slices(paths)
         if shuffle:
-            dataset = _shuffle(dataset, len(paths))
+            dataset = _shuffle(dataset, len(paths), seed=seed)
         dataset = dataset.map(
             lambda path: _load_path_image_tf(path, img_size=img_size, normalize="minus_one_one"),
             num_parallel_calls=tf.data.AUTOTUNE,
@@ -951,7 +966,7 @@ def build_gan_dataset_from_paths(
     labels = np.asarray(labels, dtype=np.int32)
     dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels))
+        dataset = _shuffle(dataset, len(labels), seed=seed)
     dataset = dataset.map(
         lambda path, label: (
             _load_path_image_tf(path, img_size=img_size, normalize="minus_one_one"),

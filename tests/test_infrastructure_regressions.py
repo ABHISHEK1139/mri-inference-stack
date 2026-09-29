@@ -287,18 +287,21 @@ class TestCollapseDetectorDiversity:
         )
         assert detector._within_class_diversity(varied) > 0.02
 
-    def test_non_finite_output_warns(self, capsys):
+    def test_non_finite_output_warns(self, caplog):
+        import logging
+
         bad = np.full((8, 8, 8, 1), np.nan, np.float32)
         detector = ModelCollapseDetector(
             self._generator_returning(bad), latent_dim=8, conditional=True
         )
-        detector.on_epoch_end(0)
-        assert "non-finite" in capsys.readouterr().out
+        with caplog.at_level(logging.WARNING):
+            detector.on_epoch_end(0)
+        assert "non-finite" in caplog.text
 
 
-# ── training path smoke tests ────────────────────────────────────────────
+# ── training state / entry point ─────────────────────────────────────────
 
-class TestTrainingEntryPoint:
+class TestTrainingStateAndEntryPoint:
     def test_help_works_without_importing_tensorflow(self):
         """``build_arg_parser`` is hoisted so --help needs no heavy imports."""
         sys.path.insert(0, str(REPO_ROOT))
@@ -306,29 +309,116 @@ class TestTrainingEntryPoint:
 
         assert train.build_arg_parser() is not None
 
-    def test_gan_state_fresh_schema_has_distinct_w_distance_slot(self):
+    def test_parser_exposes_reproducibility_flags(self):
         import train
 
-        state = train.GANState.fresh_state()
+        options = {a.dest for a in train.build_arg_parser()._actions}
+        assert {"seed", "deterministic", "log_level"} <= options
+
+    def test_gan_state_fresh_schema_has_distinct_w_distance_slot(self):
+        from training.state import GANState
+
+        state = GANState.fresh_state()
         # Wasserstein distances must not share the d_accs slot.
         assert "w_distances" in state
         assert state["w_distances"] == []
 
     def test_training_state_save_is_atomic(self, tmp_path, monkeypatch):
-        import train
+        import training.state as state_module
 
-        monkeypatch.setattr(train, "CHECKPOINT_DIR", str(tmp_path))
-        state = train.TrainingState("unit_test_track")
+        monkeypatch.setattr(state_module, "CHECKPOINT_DIR", str(tmp_path))
+        state = state_module.TrainingState("unit_test_track")
         state.update_epoch(3)
         assert state.start_epoch() == 4
         # No leftover temp file after a successful save.
         assert not list(tmp_path.glob("**/*.tmp"))
 
+    def test_state_records_the_seed(self, tmp_path, monkeypatch):
+        import json
+        from pathlib import Path
+
+        import training.state as state_module
+
+        monkeypatch.setattr(state_module, "CHECKPOINT_DIR", str(tmp_path))
+        state = state_module.TrainingState("seeded_track", seed=1234)
+        state.update_epoch(0)
+        payload = json.loads(Path(state.state_path).read_text(encoding="utf-8"))
+        assert payload["reproducibility"]["seed"] == 1234
+        assert "tensorflow" in payload["reproducibility"]
+
     def test_custom_objects_cover_the_unet_loss_and_metrics(self):
-        import train
+        from training.runtime import SEGMENTATION_CUSTOM_OBJECTS
 
         for name in ("dice_bce_loss", "dice_coefficient", "iou_metric"):
-            assert name in train.SEGMENTATION_CUSTOM_OBJECTS
+            assert name in SEGMENTATION_CUSTOM_OBJECTS
+
+    def test_every_track_module_exposes_its_trainer(self):
+        from training.tracks import (
+            classifier,
+            detection,
+            gan,
+            gan_augmented,
+            gan_v2,
+            segmentation,
+        )
+
+        assert callable(detection.train_detection)
+        assert callable(segmentation.train_segmentation)
+        assert callable(classifier.train_classifier)
+        assert callable(gan.train_gan)
+        assert callable(gan_v2.train_gan_v2)
+        assert callable(gan_augmented.train_classifier_with_gan)
+
+    def test_trainers_accept_a_seed(self):
+        import inspect
+
+        from training.tracks import classifier, detection, gan, segmentation
+
+        for fn in (detection.train_detection, segmentation.train_segmentation,
+                   classifier.train_classifier, gan.train_gan):
+            assert "seed" in inspect.signature(fn).parameters
+
+
+class TestSeeding:
+    def test_set_seed_returns_the_applied_seed(self):
+        from training.reproducibility import set_seed
+
+        assert set_seed(123) == 123
+
+    def test_set_seed_makes_numpy_reproducible(self):
+        from training.reproducibility import set_seed
+
+        set_seed(99)
+        first = np.random.default_rng(0).random(3)
+        second = np.random.default_rng(0).random(3)
+        assert np.array_equal(first, second)
+
+    def test_tf_seed_controls_dropout_masks(self):
+        """A model built after set_seed must draw identical dropout masks.
+
+        The layer is rebuilt each round because a Keras layer caches its own
+        random state; this mirrors real training, where seeding happens before
+        the model is constructed.
+        """
+        from training.reproducibility import set_seed
+
+        def dropout_pattern(seed):
+            set_seed(seed)
+            layer = tf.keras.layers.Dropout(0.5)
+            x = tf.ones((1, 6))
+            return [layer(x, training=True).numpy().astype(int).tolist()
+                    for _ in range(3)]
+
+        assert dropout_pattern(7) == dropout_pattern(7)
+        assert dropout_pattern(7) != dropout_pattern(8)
+
+    def test_seed_state_dict_shape(self):
+        from training.reproducibility import seed_state_dict
+
+        block = seed_state_dict(5)
+        assert block["seed"] == 5
+        assert {"tensorflow", "numpy", "python", "deterministic_ops"} <= set(block)
+
 
 
 class TestAugmentImageIsGraphSafe:

@@ -99,10 +99,22 @@ else:
 
 LATENT_DIM = 100
 GAN_LABEL_SMOOTHING = 0.9
-GAN_NOISE_STD = 0.1
+GAN_NOISE_DROPOUT_STD = 0.1
 
 FID_BATCH_SIZE = 64
 FS_BATCH_SIZE = 64
+
+# ── Reproducibility ──────────────────────────────────────────────────────
+# Every source of randomness is driven from this seed: Python's `random`,
+# NumPy's legacy global generator, and TensorFlow/Keras (weight init, dropout,
+# augmentation, tf.data shuffling).
+#
+# Seeding makes a run repeatable on the *same* machine and TensorFlow build. It
+# does not make results bit-identical across different hardware, TF versions, or
+# `nondeterministic` kernels, which is why the seed is recorded in every
+# checkpoint state file next to the epoch it belongs to.
+DEFAULT_SEED = _env_int("SEED", 42)
+DETERMINISTIC_OPS = _env_flag("DETERMINISTIC_OPS", default=False)
 
 PROJECT_NAME = "MRI Inference Stack"
 FLAGSHIP_TRACKS = ("detection", "classifier")

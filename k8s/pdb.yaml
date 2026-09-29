@@ -1,0 +1,12 @@
+# Keep at least one replica serving during voluntary disruptions (node drains,
+# cluster upgrades). A Deployment alone can take the whole service down.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mri-intelligence-pdb
+  namespace: mri-intelligence
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mri-intelligence

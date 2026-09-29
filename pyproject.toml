@@ -69,3 +69,6 @@ testpaths = ["tests"]
 # at the repository root. Putting the root on sys.path makes a bare `pytest`
 # invocation behave the same as `python -m pytest`.
 pythonpath = ["."]
+markers = [
+    "slow: integration tests that train a real model for one epoch",
+]

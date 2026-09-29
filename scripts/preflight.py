@@ -218,12 +218,34 @@ def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
         root / "app.py",
         root / "train.py",
         root / "config.py",
+        root / "preprocessing.py",
         root / "requirements.txt",
+        root / "requirements.lock",
+        root / "pyproject.toml",
         root / "README.md",
         root / "Dockerfile",
         root / "docker-compose.yml",
         root / "k8s" / "deployment.yaml",
+        root / "k8s" / "service.yaml",
+        root / "k8s" / "networkpolicy.yaml",
+        root / "k8s" / "pdb.yaml",
         root / "ansible" / "site.yml",
+    ]
+
+    # The training engine is a package; a missing module means a broken import
+    # graph that only surfaces at run time.
+    required_modules = [
+        root / "training" / "runtime.py",
+        root / "training" / "state.py",
+        root / "training" / "reproducibility.py",
+        root / "training" / "data_sources.py",
+        root / "training" / "callbacks.py",
+        root / "training" / "tracks" / "detection.py",
+        root / "training" / "tracks" / "classifier.py",
+        root / "training" / "tracks" / "segmentation.py",
+        root / "training" / "tracks" / "gan.py",
+        root / "training" / "tracks" / "gan_v2.py",
+        root / "training" / "tracks" / "gan_augmented.py",
     ]
 
     weight_files = [
@@ -237,7 +259,7 @@ def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
     checks: list[CheckResult] = []
     checks.append(_check_python_version(min_python))
 
-    for path in required_files:
+    for path in required_files + required_modules:
         checks.append(_check_exists(path, name=f"file-{path.name}", required=True))
 
     for path in weight_files:

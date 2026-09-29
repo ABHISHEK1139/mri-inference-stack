@@ -6,7 +6,9 @@ metadata:
   labels:
     app: mri-intelligence
 spec:
-  replicas: 1
+  # Two replicas so a node drain or rolling update does not take the service
+  # offline. Pair this with the PodDisruptionBudget in pdb.yaml.
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -19,11 +21,24 @@ spec:
     metadata:
       labels:
         app: mri-intelligence
+      annotations:
+        # Roll the deployment when the pinned image tag changes.
+        checksum/config: "replace-with-configmap-hash-on-release"
     spec:
       terminationGracePeriodSeconds: 30
+      securityContext:
+        # Container-level defaults. Enforced by the runtime, not just requested.
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: mri-app
-          image: mri-intelligence:latest
+          # Immutable, versioned tag. `:latest` makes rollbacks impossible and
+          # lets a node silently run different code after a re-pull.
+          image: ghcr.io/ABHISHEK1139/mri-inference-stack:0.2.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8501
@@ -34,6 +49,18 @@ spec:
           env:
             - name: STREAMLIT_SERVER_ADDRESS
               value: 0.0.0.0
+            - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+              value: "false"
+            # Streamlit writes to /tmp; the root filesystem is read-only.
+            - name: STREAMLIT_CONFIG_DIR
+              value: /tmp/streamlit
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop:
+                - ALL
           readinessProbe:
             httpGet:
               path: /_stcore/health
@@ -57,7 +84,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: 20
+            # Generous: the first request loads ~250 MB of model weights.
+            failureThreshold: 40
           resources:
             requests:
               cpu: "500m"
@@ -66,27 +94,25 @@ spec:
               cpu: "2"
               memory: "4Gi"
               # nvidia.com/gpu: 1  # Uncomment for GPU-accelerated inference
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
-            capabilities:
-              drop:
-                - ALL
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: outputs-volume
               mountPath: /app/outputs
-            # Optional: Uncomment if providing weights via an external PVC
-            # rather than using the weights baked into the container image:
+            # Optional: serve weights from a PVC instead of the image, so a new
+            # model can be rolled in without rebuilding.
             # - name: weights-volume
             #   mountPath: /app/weights
             #   readOnly: true
       volumes:
+        # Writable scratch. Required because the root filesystem is read-only.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
         - name: outputs-volume
-          hostPath:
-            path: /tmp/mri-intelligence/outputs
-            type: DirectoryOrCreate
+          emptyDir:
+            sizeLimit: 1Gi
         # Optional: PersistentVolumeClaim for external weights
         # - name: weights-volume
         #   persistentVolumeClaim:
         #     claimName: mri-weights-pvc
-

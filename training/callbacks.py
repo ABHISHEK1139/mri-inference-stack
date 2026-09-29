@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 from pathlib import Path
 
@@ -11,6 +12,8 @@ import numpy as np
 import tensorflow as tf
 
 from config import CHECKPOINT_DIR, CLASS_NAMES, LOG_DIR, NUM_CLASSES
+
+logger = logging.getLogger(__name__)
 
 
 def get_standard_callbacks(
@@ -159,7 +162,7 @@ class GANImageSampler:
         images = self._generate_batch()
         count = len(images)
         if count < 1:
-            print("  GAN preview skipped: generator produced no samples.")
+            logger.info('  GAN preview skipped: generator produced no samples.')
             return
         cols = min(4, count)
         rows = int(np.ceil(count / cols))
@@ -226,12 +229,15 @@ class ModelCollapseDetector:
 
         generated = np.asarray(generated)
         if not np.isfinite(generated).all():
-            print(f"  Collapse warning: non-finite generator output detected at epoch {epoch + 1}.")
+            logger.warning(
+                f"'  Collapse warning: non-finite generat"
+                f"or output detected at epoch {epoch + 1}."
+            )
             return
 
         diversity = self._within_class_diversity(generated)
         if diversity < self.min_std_threshold:
-            print(
-                f"  Collapse warning: within-class sample diversity dropped to {diversity:.4f} "
-                f"at epoch {epoch + 1}."
+            logger.warning(
+                f"'  Collapse warning: within-class sample diversit"
+                f"y dropped to {diversity:.4f} at epoch {epoch + 1}."
             )

@@ -40,17 +40,22 @@ SEGMENTATION_CUSTOM_OBJECTS = None  # populated lazily in load_research_models
 def _load_image(image_file) -> Image.Image:
     """Decode an upload into a grayscale PIL image.
 
-    The buffer is copied out and closed so Streamlit's upload handle is not
-    held open for the lifetime of the session, and a corrupt upload surfaces as
-    a Streamlit error instead of an unhandled exception.
+    The buffer is read inside a ``with`` block so Streamlit's upload handle is
+    not held open for the lifetime of the session, and the image is fully
+    materialised before the handle is released.
+
+    Raises:
+        ValueError: The upload could not be decoded. Raising rather than calling
+            ``st.stop()`` keeps the failure observable; ``st.stop`` is a no-op
+            outside a Streamlit script context, which would otherwise let
+            ``None`` reach the caller.
     """
     try:
         with Image.open(image_file) as image:
             return image.convert("L")
     except Exception as exc:
         logger.exception("Could not decode the uploaded image")
-        st.error(f"Could not read that image: {exc}")
-        st.stop()
+        raise ValueError(f"Could not read that image: {exc}") from exc
 
 
 def _load_detection_config() -> dict:
@@ -209,7 +214,11 @@ def render_flagship_workflow(core_models: dict[str, Any], detection_config: dict
     if uploaded is None:
         return
 
-    image = _load_image(uploaded)
+    try:
+        image = _load_image(uploaded)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     st.image(image, caption="Uploaded grayscale MRI", width=320)
 
     if "detection" not in core_models:
@@ -270,7 +279,11 @@ def render_classifier_only(core_models: dict[str, Any]) -> None:
     if uploaded is None:
         return
 
-    image = _load_image(uploaded)
+    try:
+        image = _load_image(uploaded)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     st.image(image, caption="Uploaded grayscale MRI", width=320)
 
     if "classifier" not in core_models:
@@ -321,7 +334,11 @@ def render_research_extensions() -> None:
         elif "segmentation" not in research_models:
             st.error("Segmentation weights are not available in this repo snapshot.")
         else:
-            image = _load_image(uploaded)
+            try:
+                image = _load_image(uploaded)
+            except ValueError as exc:
+                st.error(str(exc))
+                return
             seg_model = research_models["segmentation"]
             input_shape = seg_model.input_shape
             tensor = preprocess_segmentation(image, target_size=(input_shape[1], input_shape[2]))

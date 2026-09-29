@@ -13,11 +13,12 @@ A deployment-ready ML system focused on **resource-constrained 2D brain MRI scre
 
 The repository is structured to demonstrate an operational machine learning lifecycle:
 
-- reproducible packaging with multi-stage Docker builds
-- infrastructure automation with Ansible
-- container orchestration with Kubernetes manifests
+- reproducible packaging with multi-stage, pinned Docker builds
+- infrastructure automation with Ansible and hardened Kubernetes manifests
+- container orchestration with network policies, disruption budgets, and a non-root runtime
 - Git LFS artifact handling for runnable model weights
 - leak-free dataset partitioning and centralized preprocessing contracts
+- deterministic training with recorded seeds and a fully pinned dependency set
 
 ## Architectural Highlights
 
@@ -27,6 +28,7 @@ The repository is structured to demonstrate an operational machine learning life
 - **Conditional GAN / WGAN-GP**: Synthesis pipeline utilizing spectral normalization, self-attention, projection discrimination, and Exponential Moving Average (EMA) weight tracking for conditional MRI generation.
 - **Centralized Preprocessing**: [`preprocessing.py`](preprocessing.py) serves as the single source of truth for input resizing, channel adaptation, and range scaling (`[0, 1]` for classification/detection/segmentation, `[-1, 1]` for GANs).
 - **Leakage-Free Splitting**: Native support for patient-level grouping (`StratifiedGroupKFold`) that keeps every slice from a subject inside a single partition while preserving class balance across the train/val/test splits.
+- **Deterministic Runs**: A single seed drives weight init, dropout, augmentation, and data shuffling. The seed and library versions are written into every checkpoint's `reproducibility` block.
 
 ## Results Snapshot
 
@@ -74,8 +76,12 @@ python -m compileall app.py train.py config.py preprocessing.py data models trai
 Run the automated test suite:
 
 ```powershell
-python -m pytest tests/ -v
-```
+python -m pytest tests/ -m "not slow" -v          # unit + regression
+python -m pytest tests/ -m slow -v                 # per-track integration
+`
+
+The integration suite runs a real single-epoch training run for every track
+against a generated fixture, which is what covers the training engine end to end.``
 
 The suite includes regression tests that pin the behaviour of every previously
 fixed defect. TensorFlow-backed tests skip automatically when it is absent.
@@ -99,7 +105,7 @@ git clone https://github.com/ABHISHEK1139/mri-inference-stack.git
 cd mri-inference-stack
 git lfs install
 git lfs pull
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.lock   # or requirements.txt for floating ranges
 streamlit run app.py
 ```
 
@@ -153,6 +159,13 @@ python train.py --track gan_v2 --epochs 100
 
 # Train all tracks sequentially
 python train.py --track all --patient_level
+
+# Pin the seed, or request strict deterministic kernels
+python train.py --track detection --seed 1234
+python train.py --track all --deterministic
+
+# Ignore existing checkpoints and start fresh
+python train.py --track classifier --no_resume
 ```
 
 Key CLI flags:
@@ -183,18 +196,26 @@ Heavy transient artifacts are excluded from version control:
 |-- .github/workflows/       # CI quality checks and model smoke tests
 |-- app.py                   # Streamlit web application & UI
 |-- preprocessing.py         # Centralized preprocessing contracts
-|-- train.py                 # Multi-track training engine
-|-- config.py                # System profiles, paths, and hyperparameters
+|-- train.py                 # Training CLI entry point
+|-- config.py                # System profiles, paths, seeds, and hyperparameters
 |-- docker-compose.yml       # Container orchestration spec
-|-- Dockerfile               # Multi-stage container definition with LFS check
+|-- Dockerfile               # Multi-stage, pinned, non-root container definition
+|-- requirements.txt         # Floating dependency ranges
+|-- requirements.lock        # Fully pinned stack used for builds and CI
 |-- ansible/                 # Provisioning and deployment playbooks
-|-- k8s/                     # Kubernetes production manifests
+|-- k8s/                     # Kubernetes manifests (deploy, service, netpol, PDB)
 |-- data/                    # Dataset loaders, splits, and augmentation
 |-- models/                  # Detection, Classifier, U-Net, and GAN architectures
-|-- training/                # Callbacks, state managers, and training utilities
+|-- training/                # Training engine
+|   |-- runtime.py           #   device policy, shared helpers
+|   |-- state.py             #   atomic checkpoint state for resume
+|   |-- reproducibility.py   #   seeding and determinism
+|   |-- data_sources.py      #   dataset acquisition
+|   |-- callbacks.py         #   checkpointing, logging, collapse detection
+|   `-- tracks/              #   one module per training track
 |-- evaluation/              # Metrics, threshold calibration, and confusion matrices
 |-- scripts/                 # Preflight readiness checker and utilities
-|-- tests/                   # Unit + regression tests (dataset, models, metrics, preprocessing, infra)
+|-- tests/                   # Unit, regression, and per-track integration tests
 |-- docs/                    # Architecture diagrams, system design, and runbooks
 |-- weights/                 # LFS-managed runnable model weights
 |-- outputs/                 # Curated evaluation plots and figures
