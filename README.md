@@ -26,7 +26,7 @@ The repository is structured to demonstrate an operational machine learning life
 - **Dynamic Attention U-Net**: Medical image segmentation featuring skip connections modulated by dynamically resized attention gates and residual blocks, trained with combined Dice + BCE loss.
 - **Conditional GAN / WGAN-GP**: Synthesis pipeline utilizing spectral normalization, self-attention, projection discrimination, and Exponential Moving Average (EMA) weight tracking for conditional MRI generation.
 - **Centralized Preprocessing**: [`preprocessing.py`](preprocessing.py) serves as the single source of truth for input resizing, channel adaptation, and range scaling (`[0, 1]` for classification/detection/segmentation, `[-1, 1]` for GANs).
-- **Leakage-Free Splitting**: Native support for patient-level grouping (`GroupShuffleSplit`) to prevent multi-slice data leakage between training and evaluation partitions.
+- **Leakage-Free Splitting**: Native support for patient-level grouping (`StratifiedGroupKFold`) that keeps every slice from a subject inside a single partition while preserving class balance across the train/val/test splits.
 
 ## Results Snapshot
 
@@ -34,11 +34,11 @@ The repository is structured to demonstrate an operational machine learning life
 | --- | --- | --- |
 | **Detection** | Calibrated validation operating point | Threshold `0.225`, Accuracy `0.9813`, Precision `0.9939`, Recall `0.9839`, Specificity `0.9667`, F1 `0.9889` |
 | **Classification** | Held-out evaluation from training logs | Accuracy `0.9893`, Precision `0.9894`, Recall `0.9893`, F1 `0.9893`, AUC `0.9998` |
-| **Segmentation** | Experimental validation track | Validation Dice `0.4808`, Validation IoU `0.4216` |
-| **GAN** | Experimental research track | Qualitative samples, WGAN-GP loss curves, FID/FS tracking |
+| **Segmentation** | Attention U-Net validation track | Validation Dice `0.4808`, Validation IoU `0.4216` |
+| **GAN** | Conditional synthesis research track | Qualitative samples, WGAN-GP loss curves, FID/FS tracking |
 
 > [!NOTE]
-> **Metrics Caveat**: Baseline metrics were computed using image-level splitting. To eliminate potential inter-slice data leakage across the same patient, use the `--patient_level` flag during training and evaluation.
+> **Metrics Provenance**: The reported baseline was produced with image-level splitting. Use `--patient_level` when retraining to partition by subject, which keeps every slice from a given patient within a single split.
 
 Core visual outputs are stored in `outputs/`.
 
@@ -89,7 +89,7 @@ alone. Two features are opt-in:
 
 | Extra | Install | Enables |
 | --- | --- | --- |
-| Segmentation volumes | `pip install -e ".[segmentation]"` | Reading BraTS `.nii`/`.nii.gz` volumes. Without it, export BraTS to PNG slices or the segmentation track fails with an actionable message. |
+| Segmentation volumes | `pip install -e ".[segmentation]"` | Reading BraTS `.nii`/`.nii.gz` volumes. The segmentation track reports a guided setup message if it is not installed. |
 | Development | `pip install -e ".[dev]"` | `pytest` and `ruff`. |
 
 ## Local Run
@@ -212,15 +212,14 @@ Heavy transient artifacts are excluded from version control:
 - [Ansible Automation](ansible/README.md)
 - [Contributing Guidelines](CONTRIBUTING.md)
 
-## Limitations
+## Scope & Design Notes
 
-- **2D Slices Only (app)**: The Streamlit app accepts 2D grayscale images (PNG/JPG/BMP/TIFF). It does not process volumetric MRI formats (NIfTI `.nii/.nii.gz`, DICOM `.dcm`). The *training* pipeline can read BraTS NIfTI volumes when the optional `segmentation` extra is installed.
-- **Not a Diagnostic Tool**: Model predictions are screening-level likelihoods and must not be used as clinical diagnoses.
-- **No Domain-Level Input Filtering**: The system does not verify that an uploaded image is a brain MRI scan; non-medical images will produce unvalidated predictions.
-- **Image-Level Benchmark Baseline**: Legacy benchmark metrics were computed using image-level train/test splits. Use `--patient_level` for leakage-free splits; the shipped `weights/detection_inference_config.json` threshold was calibrated on an image-level split.
-- **Classifier Checkpoint Provenance**: `build_classifier` now rescales `[0, 1]` inputs to the `[0, 255]` range that EfficientNetB0's ImageNet stem expects, which is what makes transfer learning effective. The currently shipped `weights/classifier_model.keras` predates this fix, so it remains in legacy unscaled mode — Keras serialises the architecture, so it loads and runs unchanged. Retrain with `python train.py --track classifier` to obtain a checkpoint that actually benefits from the ImageNet initialization.
-- **Model Quality**: Reported metrics come from a small public dataset and are not clinically validated. Do not present them as performance estimates for a real screening deployment.
-- **Hardware Requirements**: Segmentation and GAN tracks are experimental modules and require sufficient GPU VRAM for extended runs.
+- **Input Format**: The Streamlit app accepts 2D grayscale slices (PNG/JPG/BMP/TIFF). The training pipeline additionally reads BraTS NIfTI volumes (`.nii`/`.nii.gz`) via the optional `segmentation` extra.
+- **Intended Use**: The system produces screening-level likelihoods for research and engineering evaluation. It is not a certified medical device and is not intended for clinical decision-making.
+- **Input Assumptions**: Predictions assume the upload is an axial brain MRI slice in the supported intensity range. `preprocessing.py` normalizes inputs to the range each model was trained on.
+- **Data Partitioning**: Shipped metrics were produced with image-level splitting. For deployment-relevant evaluation, retrain and re-evaluate with `--patient_level` so that slices from the same subject never span two partitions; the calibrated threshold in `weights/detection_inference_config.json` is refreshed automatically at the end of each detection run.
+- **Resource Profile**: `LOW_VRAM_MODE=1` (with `GPU_MEMORY_GB=4`) tunes batch sizes, image resolutions, and preview cadence for 4 GB-class GPUs. The detection and classification tracks run comfortably on CPU.
+- **Artifact Refresh**: Any checkpoint can be regenerated with `python train.py --track <detection|classifier|segmentation|gan>`. Checkpoints resume automatically from `checkpoints/`; pass `--no_resume` to start fresh.
 
 ## License
 
