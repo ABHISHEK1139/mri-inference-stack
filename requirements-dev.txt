@@ -1,2 +1,4 @@
 ruff>=0.6,<1.0
 pytest>=8.0,<9.0
+# BraTS NIfTI support, used by the segmentation track and its regression tests.
+nibabel>=5.2

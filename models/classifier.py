@@ -5,16 +5,39 @@ Enhanced with EfficientNet backbone, attention, and multi-modal fusion support.
 """
 import tensorflow as tf
 from tensorflow.keras import layers, models
+
 from config import NUM_CLASSES
 
 
-def build_classifier(num_classes=NUM_CLASSES, input_shape=(224, 224, 1)):
-    """Enhanced classifier using EfficientNetB0 with custom head."""
-    # For grayscale input, we need to adapt EfficientNet
+def build_classifier(
+    num_classes=NUM_CLASSES,
+    input_shape=(224, 224, 1),
+    imagenet_input_range=True,
+):
+    """Enhanced classifier using EfficientNetB0 with a custom attention head.
+
+    The dataset pipeline emits pixels in ``[0, 1]``, but ``EfficientNet`` starts
+    with ``Rescaling(1/255)`` + ``Normalization`` and its pretrained weights
+    expect raw ``[0, 255]`` pixels. Feeding ``[0, 1]`` straight through maps
+    every pixel to roughly ``-1.0`` after the stem, i.e. a constant image that
+    discards the ImageNet features entirely. ``imagenet_input_range=True``
+    rescales ``[0, 1]`` up to ``[0, 255]`` so transfer learning actually works.
+
+    .. note::
+       Set ``imagenet_input_range=False`` to reproduce the legacy behaviour when
+       loading checkpoints that were trained on unscaled ``[0, 1]`` inputs. The
+       flag is stored in the saved ``.keras`` config, so old checkpoints keep
+       their original behaviour.
+    """
     inputs = layers.Input(shape=input_shape)
 
     # Convert grayscale to 3 channels for pretrained backbone
     x = layers.Conv2D(3, 1, padding='same')(inputs)  # 1ch -> 3ch
+
+    if imagenet_input_range:
+        # EfficientNet's internal stem rescales by 1/255; undo our [0,1] scaling
+        # first so the pretrained normalisation sees the range it was trained on.
+        x = layers.Rescaling(255.0, name="imagenet_range_rescale")(x)
 
     base = tf.keras.applications.EfficientNetB0(
         include_top=False,
@@ -24,11 +47,12 @@ def build_classifier(num_classes=NUM_CLASSES, input_shape=(224, 224, 1)):
     x = base(x)
 
     # ── Attention pooling ──────────────────────────────────────────────
-    # Instead of simple GAP, use channel + spatial attention
+    # Instead of simple GAP, use channel attention (squeeze-and-excitation).
+    channels = int(x.shape[-1])
     se = layers.GlobalAveragePooling2D()(x)
-    se = layers.Dense(x.shape[-1] // 16, activation='relu')(se)
-    se = layers.Dense(x.shape[-1], activation='sigmoid')(se)
-    se = layers.Reshape((1, 1, x.shape[-1]))(se)
+    se = layers.Dense(max(1, channels // 16), activation='relu')(se)
+    se = layers.Dense(channels, activation='sigmoid')(se)
+    se = layers.Reshape((1, 1, channels))(se)
     x = layers.Multiply()([x, se])
 
     x = layers.GlobalAveragePooling2D()(x)
@@ -91,13 +115,18 @@ def build_classifier_baseline(num_classes=NUM_CLASSES, input_shape=(224, 224, 1)
     return model
 
 
-def build_multimodal_classifier(num_classes=NUM_CLASSES, input_shape=(224, 224, 1), num_modalities=4):
+def build_multimodal_classifier(num_classes=NUM_CLASSES, input_shape=(224, 224, 1),
+    num_modalities=4):
     """
     Multi-modal fusion classifier.
     Accepts multiple MRI modalities (T1, T2, FLAIR, T1ce) as separate inputs
     and fuses them for classification.
     """
-    # ── Separate encoder per modality ──────────────────────────────────
+    # ── Per-modality encoder ───────────────────────────────────────────
+    # NOTE: these encoders are NOT weight-shared — each modality gets its own
+    # independent copy of the conv stack. Sharing would require calling one
+    # sub-model on several inputs; keeping them independent is the simpler and
+    # more expressive choice for this dataset size.
     modality_inputs = []
     modality_features = []
 
@@ -105,7 +134,6 @@ def build_multimodal_classifier(num_classes=NUM_CLASSES, input_shape=(224, 224, 
         inp = layers.Input(shape=input_shape, name=f"modality_{i}")
         modality_inputs.append(inp)
 
-        # Shared encoder backbone
         x = layers.Conv2D(32, 3, activation='relu', padding='same')(inp)
         x = layers.BatchNormalization()(x)
         x = layers.MaxPooling2D()(x)

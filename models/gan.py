@@ -5,11 +5,13 @@ v2: Research-grade cGAN with ResNet blocks, spectral normalization,
 
 Includes legacy builders for backward compatibility.
 """
+from contextlib import contextmanager
+
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
-import numpy as np
-from config import LATENT_DIM, NUM_CLASSES
 
+from config import LATENT_DIM, NUM_CLASSES
 
 # ═══════════════════════════════════════════════════════════════════════
 # BUILDING BLOCKS (v2)
@@ -62,7 +64,7 @@ class SelfAttention(layers.Layer):
         super().__init__(**kwargs)
 
     def build(self, input_shape):
-        channels = input_shape[-1]
+        channels = int(input_shape[-1])
         self.ch = channels
         reduced = max(channels // 8, 1)
         self.query = _spectral_norm(layers.Conv2D(reduced, 1, use_bias=False))
@@ -81,7 +83,11 @@ class SelfAttention(layers.Layer):
         k = tf.reshape(self.key(x), [batch, hw, -1])      # (B, HW, C/8)
         v = tf.reshape(self.value(x), [batch, hw, c])      # (B, HW, C)
 
+        # Scale logits by 1/sqrt(d) (scaled dot-product attention). Without this
+        # the logits have a large spread, the softmax saturates, and the layer
+        # degenerates into a near-uniform global average with vanishing grads.
         attn = tf.matmul(q, k, transpose_b=True)           # (B, HW, HW)
+        attn = attn / tf.math.sqrt(tf.cast(tf.shape(q)[-1], attn.dtype))
         attn = tf.nn.softmax(attn, axis=-1)
 
         out = tf.matmul(attn, v)                            # (B, HW, C)
@@ -98,8 +104,20 @@ class GenResBlock(layers.Layer):
         self.filters = filters
         self.upsample = upsample
 
-    def build(self, input_shape):
-        self.cbn1 = ConditionalBatchNorm(input_shape[-1])
+    def build(self, x_shape, class_embed_shape=None):
+        # `call` receives two tensors (x, class_embed), so Keras 3 hands us one
+        # shape per call argument. Older/legacy paths may still pass a single
+        # nested list of shapes; unwrap that form defensively. Note that
+        # `x_shape[-1]` must index the *feature map* -- reading it off the
+        # embedding shape built a Dense with a TensorShape unit and failed.
+        if (
+            isinstance(x_shape, (list, tuple))
+            and x_shape
+            and isinstance(x_shape[0], (list, tuple, tf.TensorShape))
+        ):
+            x_shape = x_shape[0]
+        channels = int(x_shape[-1])
+        self.cbn1 = ConditionalBatchNorm(channels)
         self.conv1 = _spectral_norm(
             layers.Conv2D(self.filters, 3, padding="same", use_bias=False,
                           kernel_initializer="he_normal")
@@ -111,7 +129,7 @@ class GenResBlock(layers.Layer):
         )
 
         # Shortcut conv if channels change
-        if input_shape[-1] != self.filters:
+        if channels != self.filters:
             self.shortcut = _spectral_norm(
                 layers.Conv2D(self.filters, 1, use_bias=False)
             )
@@ -120,7 +138,7 @@ class GenResBlock(layers.Layer):
 
         if self.upsample:
             self.up = layers.UpSampling2D(size=(2, 2), interpolation="nearest")
-        super().build(input_shape)
+        super().build(x_shape)
 
     def call(self, x, class_embed, training=None):
         h = self.cbn1(x, class_embed, training=training)
@@ -324,12 +342,21 @@ class ProjectionDiscriminator(tf.keras.Model):
         self.res4 = DiscResBlock(512, downsample=True)   # →8×8
         self.res5 = DiscResBlock(512, downsample=False)  # →8×8
 
-        # Output
-        self.linear = _spectral_norm(layers.Dense(1))
+        # Output. Spectral normalisation is deliberately NOT applied here: it is
+        # the standard WGAN practice to leave the critic's scalar output
+        # unconstrained, since normalising it fights the projection term and
+        # produces non-monotone/"sign-flipping" critic losses.
+        self.linear = layers.Dense(1)
 
-        # Projection: class embedding for projection discriminator
-        # Note: Embedding is not wrapped in spectral norm (incompatible wrapper)
-        self.class_embed = layers.Embedding(num_classes, 512)
+        # Projection: class embedding for projection discriminator.
+        # `embed_dim` was previously stored and exported in get_config() but
+        # ignored, hard-coding a 512-wide embedding instead.
+        self.class_embed = layers.Embedding(num_classes, embed_dim)
+
+        # Projects the pooled feature map into the embedding space so the inner
+        # product is a genuine projection rather than a sum of unnormalised
+        # 8x8x512 activations (which dominated the conditional term).
+        self.feature_proj = layers.Dense(embed_dim, use_bias=False)
 
     def call(self, inputs, training=None):
         # inputs = [image, label_indices_or_onehot]
@@ -349,15 +376,17 @@ class ProjectionDiscriminator(tf.keras.Model):
         h = self.res4(h)
         h = self.res5(h)
 
-        # Global sum pooling
+        # Global average pooling (magnitude is resolution-independent, unlike
+        # the previous global *sum*).
         h = tf.nn.relu(h)
-        features = tf.reduce_sum(h, axis=[1, 2])  # (B, 512)
+        features = tf.reduce_mean(h, axis=[1, 2])  # (B, 512)
+        features = self.feature_proj(features)    # (B, embed_dim)
 
         # Unconditional output
         out = self.linear(features)  # (B, 1)
 
         # Projection: inner product with class embedding
-        class_emb = tf.cast(self.class_embed(class_idx), features.dtype)  # (B, 512)
+        class_emb = tf.cast(self.class_embed(class_idx), features.dtype)  # (B, embed_dim)
         projection = tf.reduce_sum(features * class_emb, axis=1, keepdims=True)
 
         return out + projection  # Raw logit (no sigmoid for WGAN-GP)
@@ -397,15 +426,17 @@ def build_v2_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES,
     return gen
 
 
-def build_v2_discriminator(input_shape=(128, 128, 1), num_classes=NUM_CLASSES):
+def build_v2_discriminator(input_shape=(128, 128, 1), num_classes=NUM_CLASSES, embed_dim=128):
     """Build the v2 projection discriminator."""
     disc = ProjectionDiscriminator(
-        input_shape=input_shape, num_classes=num_classes,
+        input_shape=input_shape, num_classes=num_classes, embed_dim=embed_dim,
         name="projection_discriminator"
     )
-    # Build the model by calling it with dummy data
+    # Build the model by calling it with eye() labels so every class embedding
+    # row is exercised. All-zero labels made argmax always return class 0,
+    # leaving the remaining embedding rows untouched at build time.
     dummy_img = tf.zeros((1, *input_shape))
-    dummy_labels = tf.zeros((1, num_classes))
+    dummy_labels = tf.eye(num_classes)[:1]
     _ = disc([dummy_img, dummy_labels], training=False)
     print(f"  V2 Discriminator params: {disc.count_params():,}")
     return disc
@@ -423,23 +454,57 @@ class EMAGenerator:
     def __init__(self, generator, decay=0.999):
         self.generator = generator
         self.decay = decay
-        self.ema_weights = [tf.Variable(w, trainable=False, name=f"ema_{i}")
-                           for i, w in enumerate(generator.trainable_variables)]
+        # Track *all* variables, not just trainable ones: BatchNorm moving_mean
+        # / moving_variance are non-trainable state, and leaving them out
+        # produced a hybrid model (EMA kernels + live BN statistics) that is not
+        # a valid EMA of the generator.
+        self._variables = list(generator.variables)
+        self.ema_weights = [
+            tf.Variable(w, trainable=False, name=f"ema_{i}") for i, w in enumerate(self._variables)
+        ]
+        self._backup: list | None = None
+        self._swap_depth = 0
 
     def update(self):
         """Update EMA weights after each generator training step."""
-        for ema_w, w in zip(self.ema_weights, self.generator.trainable_variables):
+        for ema_w, w in zip(self.ema_weights, self._variables, strict=True):
             ema_w.assign(self.decay * ema_w + (1.0 - self.decay) * w)
 
+    @contextmanager
+    def swapped(self):
+        """Context manager that temporarily applies EMA weights.
+
+        Replaces the error-prone ``apply()``/``restore()`` pair: an exception
+        between the two calls used to leave the generator permanently holding
+        EMA weights while the optimizer kept updating the real ones, silently
+        corrupting the rest of the run. Re-entrant via a depth counter.
+        """
+        self.apply()
+        try:
+            yield self.generator
+        finally:
+            self.restore()
+
     def apply(self):
-        """Apply EMA weights to generator (for evaluation/preview)."""
-        self._backup = [tf.identity(w) for w in self.generator.trainable_variables]
-        for w, ema_w in zip(self.generator.trainable_variables, self.ema_weights):
+        """Apply EMA weights to generator (for evaluation/preview).
+
+        Prefer :meth:`swapped`, which guarantees :meth:`restore` runs.
+        """
+        if self._backup is not None:
+            self._swap_depth += 1
+            return
+        self._backup = [tf.identity(w) for w in self._variables]
+        for w, ema_w in zip(self._variables, self.ema_weights, strict=True):
             w.assign(ema_w)
 
     def restore(self):
         """Restore original weights after evaluation."""
-        for w, backup in zip(self.generator.trainable_variables, self._backup):
+        if self._backup is None:
+            return
+        self._swap_depth -= 1
+        if self._swap_depth > 0:
+            return
+        for w, backup in zip(self._variables, self._backup, strict=True):
             w.assign(backup)
         self._backup = None
 
@@ -451,23 +516,44 @@ class EMAGenerator:
         )
 
     def load(self, path: str) -> None:
-        """Load EMA weights from a .npz file."""
-        data = np.load(path)
-        for i, ema_w in enumerate(self.ema_weights):
-            key = f"ema_{i}"
-            if key in data:
-                ema_w.assign(data[key])
+        """Load EMA weights from a .npz file.
+
+        Validates the key set and shapes; previously a partial or foreign
+        checkpoint was accepted silently, leaving some variables at their
+        initial values and producing a subtly wrong generator.
+        """
+        with np.load(path) as data:
+            expected = {f"ema_{i}" for i in range(len(self.ema_weights))}
+            found = set(data.files)
+            if found != expected:
+                raise ValueError(
+                    f"EMA checkpoint {path} does not match this generator: "
+                    f"missing={sorted(expected - found)[:5]}, "
+                    f"unexpected={sorted(found - expected)[:5]}"
+                )
+            for i, ema_w in enumerate(self.ema_weights):
+                value = data[f"ema_{i}"]
+                if tuple(value.shape) != tuple(ema_w.shape):
+                    raise ValueError(
+                        f"EMA weight 'ema_{i}' has shape {value.shape} but the "
+                        f"generator expects {tuple(ema_w.shape)}."
+                    )
+                ema_w.assign(value)
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # WGAN-GP GRADIENT PENALTY
 # ═══════════════════════════════════════════════════════════════════════
 
-def gradient_penalty(discriminator, real_images, fake_images, labels, lambda_gp=10.0):
-    """Compute gradient penalty for WGAN-GP.
+def gradient_penalty(discriminator, real_images, fake_images, labels, lambda_gp=1.0):
+    """Compute the WGAN-GP gradient penalty.
 
-    Interpolates between real and fake images and penalizes the discriminator
-    gradient norm away from 1.0.
+    Returns ``lambda_gp * E[(||∇D(x̂)||_2 - 1)^2]``. ``lambda_gp`` defaults to
+    ``1.0`` so the function is unscaled by default; callers applying
+    ``lambda_gp * gradient_penalty(...)`` therefore get the intended penalty
+    instead of silently squaring the coefficient (previously this function
+    pre-multiplied by 10.0 while its only caller added no factor, so the two
+    conventions could not be combined without a 10x divergence).
     """
     batch_size = tf.shape(real_images)[0]
     alpha = tf.random.uniform([batch_size, 1, 1, 1], 0.0, 1.0)
@@ -571,7 +657,8 @@ def build_gan(generator, discriminator, latent_dim=LATENT_DIM, lr=2e-4):
     return gan
 
 
-def build_conditional_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, output_shape=(128, 128, 1)):
+def build_conditional_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, output_shape=(128,
+    128, 1)):
     """Conditional GAN generator — generates images conditioned on tumour type."""
     h, w, c = output_shape
     if h % 16 != 0 or w % 16 != 0:
@@ -625,7 +712,8 @@ def build_conditional_discriminator(input_shape=(128, 128, 1), num_classes=NUM_C
     img_input = layers.Input(shape=input_shape, name="image_input")
     label_input = layers.Input(shape=(num_classes,), name="label_input")
 
-    label_spatial = layers.Dense(input_shape[0] * input_shape[1] * 1, activation='relu')(label_input)
+    label_spatial = layers.Dense(input_shape[0] * input_shape[1] * 1,
+        activation='relu')(label_input)
     label_spatial = layers.Reshape((input_shape[0], input_shape[1], 1))(label_spatial)
 
     x = layers.Concatenate()([img_input, label_spatial])
@@ -653,7 +741,8 @@ def build_conditional_discriminator(input_shape=(128, 128, 1), num_classes=NUM_C
     return model
 
 
-def build_conditional_gan(generator, discriminator, latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, lr=2e-4):
+def build_conditional_gan(generator, discriminator, latent_dim=LATENT_DIM, num_classes=NUM_CLASSES,
+    lr=2e-4):
     """Assemble conditional GAN."""
     discriminator.compile(
         optimizer=tf.keras.optimizers.Adam(lr, beta_1=0.5),

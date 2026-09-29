@@ -4,21 +4,33 @@ Optimized for NVIDIA RTX 3050 (4GB VRAM).
 Features: checkpoint resumption, automatic dataset download, and monitoring.
 """
 import argparse
+import json
 import os
 import sys
-import json
 import time
+from contextlib import contextmanager
+
 import numpy as np
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Brain Tumour GAN Challenge Training")
-    parser.add_argument("--track", type=str, default="all", choices=["all", "detection", "segmentation", "classifier", "gan", "gan_v2", "gan_augmented"])
-    parser.add_argument("--gan_type", type=str, default="conditional", choices=["baseline", "dcgan", "conditional", "stylegan"])
-    parser.add_argument("--epochs", type=int, default=None)
+    parser.add_argument("--track", type=str, default="all", choices=["all", "detection",
+        "segmentation", "classifier", "gan", "gan_v2",
+            "gan_augmented"])
+    parser.add_argument("--gan_type", type=str, default="conditional", choices=["baseline", "dcgan",
+        "conditional", "stylegan"])
+    parser.add_argument("--epochs", type=int,
+        default=None)
     parser.add_argument("--data_dir", type=str, default=None)
-    parser.add_argument("--no_resume", action="store_true", help="Disable checkpoint resume and start fresh")
-    parser.add_argument("--download_figshare", action="store_true", help="Force/ensure Figshare download")
-    parser.add_argument("--download_brats", action="store_true", help="Force/ensure BraTS download")
-    parser.add_argument("--only_download", action="store_true", help="Download datasets only and exit")
+    parser.add_argument("--no_resume", action="store_true",
+        help="Disable checkpoint resume and start fresh")
+    parser.add_argument("--download_figshare", action="store_true",
+        help="Force/ensure Figshare download")
+    parser.add_argument("--download_brats", action="store_true",
+        help="Force/ensure BraTS download")
+    parser.add_argument("--only_download", action="store_true",
+        help="Download datasets only and exit")
     parser.add_argument(
         "--patient_level",
         action="store_true",
@@ -35,61 +47,33 @@ if __name__ == "__main__" and any(flag in {"-h", "--help"} for flag in sys.argv[
 import tensorflow as tf
 
 from config import (
-    RAW_DIR,
     CHECKPOINT_DIR,
-    LOG_DIR,
-    WEIGHTS_DIR,
-    NUM_CLASSES,
     LATENT_DIM,
-    TRACK_CONFIGS,
-    ImageConfig,
-    RUNTIME_PROFILE,
+    LOG_DIR,
     LOW_VRAM_MODE,
+    NUM_CLASSES,
+    RAW_DIR,
+    RUNTIME_PROFILE,
+    TRACK_CONFIGS,
+    WEIGHTS_DIR,
+    ImageConfig,
+    ensure_directories,
 )
 from data.dataset import (
-    download_dataset,
-    load_figshare_dataset,
-    load_brats_dataset,
-    load_brats_paths,
-    load_images_from_paths,
-    get_figshare_file_index,
-    get_figshare_train_val_test_split,
-    get_figshare_patient_level_split,
     _extract_patient_id,
-    split_data,
-    build_detection_dataset,
-    build_detection_dataset_from_paths,
-    build_segmentation_dataset,
-    build_segmentation_dataset_from_paths,
     build_classifier_dataset,
     build_classifier_dataset_from_paths,
-    build_gan_dataset,
+    build_detection_dataset_from_paths,
     build_gan_dataset_from_paths,
+    build_segmentation_dataset_from_paths,
+    download_dataset,
+    get_figshare_patient_level_split,
+    get_figshare_train_val_test_split,
+    load_brats_paths,
+    load_figshare_dataset,
+    load_images_from_paths,
     mix_real_synthetic,
-)
-from models.detection import build_detection_model, build_detection_baseline
-from models.segmentation import build_unet, dice_bce_loss, dice_coefficient, iou_metric
-from models.classifier import build_classifier, build_classifier_baseline
-from models.gan import (
-    build_generator,
-    build_discriminator,
-    build_gan,
-    build_conditional_generator,
-    build_conditional_discriminator,
-    build_conditional_gan,
-    build_stylegan_generator,
-    build_baseline_generator,
-    build_baseline_discriminator,
-    build_v2_generator,
-    build_v2_discriminator,
-    gradient_penalty,
-    EMAGenerator,
-)
-from training.callbacks import (
-    get_standard_callbacks,
-    GANLossLogger,
-    GANImageSampler,
-    ModelCollapseDetector,
+    split_data,
 )
 from evaluation.detection_eval import calibrate_binary_threshold, evaluate_detection_refined
 from evaluation.metrics import (
@@ -97,25 +81,59 @@ from evaluation.metrics import (
     calculate_fs,
     evaluate_classifier,
     evaluate_segmentation,
-    plot_loss_curves,
-    plot_gan_losses,
     plot_fid_fs_vs_epochs,
+    plot_gan_losses,
+    plot_loss_curves,
+)
+from models.classifier import build_classifier, build_classifier_baseline
+from models.detection import build_detection_baseline, build_detection_model
+from models.gan import (
+    EMAGenerator,
+    build_baseline_discriminator,
+    build_baseline_generator,
+    build_conditional_discriminator,
+    build_conditional_generator,
+    build_discriminator,
+    build_generator,
+    build_stylegan_generator,
+    build_v2_discriminator,
+    build_v2_generator,
+    gradient_penalty,
+)
+from models.segmentation import build_unet, dice_bce_loss, dice_coefficient, iou_metric
+from training.callbacks import (
+    GANImageSampler,
+    GANLossLogger,
+    ModelCollapseDetector,
+    get_standard_callbacks,
 )
 
 IMG_CFG = ImageConfig()
 
+# Required to reload a serialized U-Net: the model is compiled with a custom
+# loss and two custom metrics, which Keras cannot resolve from a .keras archive
+# without them.
+SEGMENTATION_CUSTOM_OBJECTS = {
+    "dice_bce_loss": dice_bce_loss,
+    "dice_coefficient": dice_coefficient,
+    "iou_metric": iou_metric,
+}
+
 
 def configure_gpu():
-    """Configure TensorFlow for RTX 3050."""
+    """Configure TensorFlow for the target GPU."""
+    ensure_directories()
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
         try:
-            use_memory_growth = os.getenv("TF_MEMORY_GROWTH", "1").strip().lower() in {"1", "true", "yes", "on"}
+            use_memory_growth = os.getenv("TF_MEMORY_GROWTH", "1").strip().lower() in {"1", "true",
+                "yes", "on"}
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, use_memory_growth)
             print(f"TF memory growth: {use_memory_growth}")
             print(f"GPU detected: {[gpu.name for gpu in gpus]}")
-            use_mixed_precision = os.getenv("MIXED_PRECISION", "1").strip().lower() in {"1", "true", "yes", "on"}
+            use_mixed_precision = os.getenv("MIXED_PRECISION", "1").strip().lower() in {"1", "true",
+                "yes", "on"}
             if use_mixed_precision:
                 policy = tf.keras.mixed_precision.Policy("mixed_float16")
                 tf.keras.mixed_precision.set_global_policy(policy)
@@ -166,7 +184,7 @@ def _json_safe(value):
 def _sanitize_grads(grads, variables):
     """Replace None/NaN/Inf gradients with finite tensors."""
     fixed = []
-    for grad, var in zip(grads, variables):
+    for grad, var in zip(grads, variables, strict=True):
         if grad is None:
             fixed.append(tf.zeros_like(var))
             continue
@@ -199,7 +217,7 @@ class TrainingState:
     def _load(self):
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r", encoding="utf-8") as f:
+                with open(self.state_path, encoding="utf-8") as f:
                     data = json.load(f)
                 print(f"Resuming {self.track_name} from epoch {data.get('last_epoch', 0) + 1}")
                 return data
@@ -208,8 +226,10 @@ class TrainingState:
         return {"last_epoch": -1}
 
     def save(self):
-        with open(self.state_path, "w", encoding="utf-8") as f:
+        tmp_path = f"{self.state_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self.state, f, indent=2)
+        os.replace(tmp_path, self.state_path)
 
     def update_epoch(self, epoch):
         self.state["last_epoch"] = int(epoch)
@@ -241,25 +261,21 @@ class GANState:
     def _load(self):
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r", encoding="utf-8") as f:
+                with open(self.state_path, encoding="utf-8") as f:
                     data = json.load(f)
                 print(f"Resuming GAN ({self.gan_type}) from epoch {data.get('last_epoch', 0) + 1}")
                 return data
             except Exception as e:
                 print(f"Could not load GAN state: {e}")
-        return {
-            "last_epoch": -1,
-            "d_losses": [],
-            "g_losses": [],
-            "d_accs": [],
-            "g_accs": [],
-            "fid_scores": [],
-            "fs_scores": [],
-        }
+        return self.fresh_state()
 
     def save(self):
-        with open(self.state_path, "w", encoding="utf-8") as f:
+        # Write to a temp file then swap, so an interrupted save cannot leave a
+        # truncated JSON file that silently resets the run on the next resume.
+        tmp_path = f"{self.state_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self.state, f, indent=2)
+        os.replace(tmp_path, self.state_path)
 
     def start_epoch(self):
         return int(self.state.get("last_epoch", -1)) + 1
@@ -269,6 +285,9 @@ class GANState:
 
     def discriminator_ckpt(self):
         return os.path.join(self.track_dir, f"discriminator_{self.gan_type}_last.keras")
+
+    def ema_ckpt(self):
+        return os.path.join(self.track_dir, f"ema_{self.gan_type}.npz")
 
     def has_ckpt(self):
         return os.path.exists(self.generator_ckpt()) and os.path.exists(self.discriminator_ckpt())
@@ -281,15 +300,43 @@ class GANState:
             "g_losses": [],
             "d_accs": [],
             "g_accs": [],
+            "w_distances": [],
             "fid_scores": [],
             "fs_scores": [],
+            "best_quality": float("inf"),
+            "gan_no_improve": 0,
+            "g_steps": None,
+            "d_lr": None,
         }
+
+
+@contextmanager
+def _float32_precision():
+    """Force float32 for the duration of a block, always restoring the policy.
+
+    The GAN trainers previously restored the mixed-precision policy only on the
+    normal exit path; any early ``return`` (for example "already reached
+    requested epochs") left every subsequent track running in float32, silently
+    disabling the configured mixed precision.
+    """
+    original_policy = tf.keras.mixed_precision.global_policy()
+    switched = original_policy.name != "float32"
+    if switched:
+        print(f"Switching from {original_policy.name} to float32 for this stage")
+        tf.keras.mixed_precision.set_global_policy("float32")
+    try:
+        yield
+    finally:
+        if switched:
+            tf.keras.mixed_precision.set_global_policy(original_policy)
+            print(f"Restored mixed precision policy: {original_policy.name}")
 
 
 def _download_kaggle_alternative():
     """Fallback dataset downloader for classification MRI data."""
-    from kaggle.api.kaggle_api_extended import KaggleApi
     import glob
+
+    from kaggle.api.kaggle_api_extended import KaggleApi
 
     out_dir = os.path.join(RAW_DIR, "figshare")
     os.makedirs(out_dir, exist_ok=True)
@@ -333,7 +380,10 @@ def ensure_datasets(download_figshare=True, download_brats=True):
                         print("Kaggle fallback finished but no files found")
                 except BaseException as ke:
                     print(f"Kaggle fallback failed: {ke}")
-                    print("Please manually place Figshare/Kaggle MRI dataset under data/raw/figshare")
+                    print(
+                        "Please manually place Figshare/Kaggle MRI data "
+                        "under data/raw/figshare"
+                    )
         else:
             print(f"Figshare dataset found: {figshare_dir}")
 
@@ -354,18 +404,21 @@ def ensure_datasets(download_figshare=True, download_brats=True):
             print(f"BraTS dataset found: {brats_dir}")
 
 
-def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, patient_level=False):
+def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True,
+    patient_level=False):
     print("\n" + "=" * 60)
     print("TRACK 1 - DETECTION")
     print("=" * 60)
 
     if patient_level or os.getenv("PATIENT_LEVEL_SPLIT", "0") == "1":
         print("Using patient-level split (grouped by patient ID)")
-        (X_train_paths, y_train_multiclass), (X_val_paths, y_val_multiclass), (X_test_paths, y_test_multiclass) = (
+        (X_train_paths, y_train_multiclass), (X_val_paths, y_val_multiclass), (X_test_paths,
+            y_test_multiclass) = (
             get_figshare_patient_level_split(data_dir)
         )
     else:
-        (X_train_paths, y_train_multiclass), (X_val_paths, y_val_multiclass), (X_test_paths, y_test_multiclass) = (
+        (X_train_paths, y_train_multiclass), (X_val_paths, y_val_multiclass), (X_test_paths,
+            y_test_multiclass) = (
             get_figshare_train_val_test_split(data_dir)
         )
     y_train = (y_train_multiclass < 3).astype(np.int32)
@@ -373,9 +426,11 @@ def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, 
     y_test = (y_test_multiclass < 3).astype(np.int32)
 
     cfg = TRACK_CONFIGS["detection"]
-    train_ds = build_detection_dataset_from_paths(X_train_paths, y_train, img_size=IMG_CFG.detection_size, batch_size=cfg.batch_size)
+    train_ds = build_detection_dataset_from_paths(X_train_paths, y_train,
+        img_size=IMG_CFG.detection_size, batch_size=cfg.batch_size)
     val_ds = build_detection_dataset_from_paths(
-        X_val_paths, y_val, img_size=IMG_CFG.detection_size, batch_size=cfg.batch_size, shuffle=False, augment=False
+        X_val_paths, y_val, img_size=IMG_CFG.detection_size, batch_size=cfg.batch_size,
+            shuffle=False, augment=False
     )
 
     state = TrainingState("detection")
@@ -387,7 +442,10 @@ def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, 
         model = tf.keras.models.load_model(ckpt)
         initial_epoch = state.start_epoch()
     else:
-        model = build_detection_model(input_shape=(*IMG_CFG.detection_size, 1)) if use_enhanced else build_detection_baseline(input_shape=(*IMG_CFG.detection_size, 1))
+        if use_enhanced:
+            model = build_detection_model(input_shape=(*IMG_CFG.detection_size, 1))
+        else:
+            model = build_detection_baseline(input_shape=(*IMG_CFG.detection_size, 1))
 
     class_weights = _balanced_class_weight_dict(y_train)
     print(f"Detection class weights: {class_weights}")
@@ -408,7 +466,8 @@ def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, 
             initial_epoch=initial_epoch,
             epochs=total_epochs,
             class_weight=class_weights,
-            callbacks=get_standard_callbacks(model, "detection") + [StateSaver()],
+            shuffle=False,
+            callbacks=get_standard_callbacks(model, "detection", resume=resume) + [StateSaver()],
         )
 
     best_ckpt = state.checkpoint_path()
@@ -416,10 +475,13 @@ def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, 
         print(f"Reloading best detection checkpoint: {best_ckpt}")
         model = tf.keras.models.load_model(best_ckpt)
 
-    X_val = load_images_from_paths(X_val_paths, img_size=IMG_CFG.detection_size)
+    X_val = load_images_from_paths(X_val_paths,
+        img_size=IMG_CFG.detection_size)
     X_test = load_images_from_paths(X_test_paths, img_size=IMG_CFG.detection_size)
-    val_probs = model.predict(X_val, verbose=0).flatten()
-    threshold, threshold_metrics = calibrate_binary_threshold(y_val, val_probs, optimize="f1", min_recall=0.97)
+    val_probs = model.predict(X_val,
+        verbose=0).flatten()
+    threshold, threshold_metrics = calibrate_binary_threshold(y_val, val_probs, optimize="f1",
+        min_recall=0.97)
     print(
         "Detection threshold tuning - "
         f"threshold={threshold:.3f} "
@@ -450,17 +512,19 @@ def train_detection(data_dir=None, use_enhanced=True, epochs=None, resume=True, 
 
     metrics = evaluate_detection_refined(model, X_test, y_test, threshold=threshold)
     if history is not None:
-        plot_loss_curves(history, save_path=os.path.join(LOG_DIR, "detection", "loss_curves.png"))
+        plot_loss_curves(history, save_path=os.path.join(LOG_DIR, "detection",
+            "loss_curves.png"))
     return model, history, metrics
 
 
-def train_segmentation(data_dir=None, use_attention=True, use_residual=True, epochs=None, resume=True, patient_level=True):
+def train_segmentation(data_dir=None, use_attention=True, use_residual=True, epochs=None,
+    resume=True, patient_level=True):
     print("\n" + "=" * 60)
     print("TRACK 2 - SEGMENTATION")
     print("=" * 60)
 
     # Memory-efficient: load file paths only, not pixel data
-    img_paths, mask_paths = load_brats_paths(data_dir, img_size=IMG_CFG.segmentation_size)
+    img_paths, mask_paths = load_brats_paths(data_dir)
     n = len(img_paths)
 
     groups = np.array([_extract_patient_id(p) for p in img_paths])
@@ -470,16 +534,23 @@ def train_segmentation(data_dir=None, use_attention=True, use_residual=True, epo
         from sklearn.model_selection import GroupShuffleSplit
 
         gss_test = GroupShuffleSplit(n_splits=1, test_size=0.15, random_state=42)
-        train_val_idx, test_idx = next(gss_test.split(img_paths, groups=groups))
+        train_val_idx, test_idx = next(gss_test.split(img_paths,
+            groups=groups))
 
-        tv_img, tv_msk, tv_groups = img_paths[train_val_idx], mask_paths[train_val_idx], groups[train_val_idx]
+        tv_img = img_paths[train_val_idx]
+        tv_msk = mask_paths[train_val_idx]
+        tv_groups = groups[train_val_idx]
         gss_val = GroupShuffleSplit(n_splits=1, test_size=0.17647, random_state=42)
-        train_idx, val_idx = next(gss_val.split(tv_img, groups=tv_groups))
+        train_idx, val_idx = next(gss_val.split(tv_img,
+            groups=tv_groups))
 
         train_img, train_msk = tv_img[train_idx], tv_msk[train_idx]
         val_img, val_msk = tv_img[val_idx], tv_msk[val_idx]
         test_img, test_msk = img_paths[test_idx], mask_paths[test_idx]
-        print(f"Patient-level split ({n_unique} patients): Train={len(train_img)}, Val={len(val_img)}, Test={len(test_img)}")
+        print(
+            f"Patient-level split ({n_unique} patients): "
+            f"Train={len(train_img)}, Val={len(val_img)}, Test={len(test_img)}"
+        )
     else:
         rng = np.random.default_rng(42)
         idx = rng.permutation(n)
@@ -513,7 +584,13 @@ def train_segmentation(data_dir=None, use_attention=True, use_residual=True, epo
             use_attention=use_attention,
             use_residual=use_residual,
         )
-        model.load_weights(ckpt)
+        try:
+            model.load_weights(ckpt)
+        except Exception as exc:
+            # A .keras archive may have been written by ModelCheckpoint; fall
+            # back to a full model load that supplies the custom loss/metrics.
+            print(f"load_weights failed ({exc}); retrying via load_model with custom_objects")
+            model = tf.keras.models.load_model(ckpt, custom_objects=SEGMENTATION_CUSTOM_OBJECTS)
         initial_epoch = state.start_epoch()
     else:
         model = build_unet(
@@ -542,34 +619,51 @@ def train_segmentation(data_dir=None, use_attention=True, use_residual=True, epo
         validation_data=val_ds,
         initial_epoch=initial_epoch,
         epochs=total_epochs,
-        callbacks=get_standard_callbacks(model, "segmentation") + [StateSaver()],
+        callbacks=get_standard_callbacks(model, "segmentation", resume=resume) + [StateSaver()],
     )
+
+    # Export the best checkpoint, not whatever weights training happened to end on.
+    best_ckpt = state.checkpoint_path()
+    if best_ckpt:
+        print(f"Reloading best segmentation checkpoint: {best_ckpt}")
+        try:
+            model.load_weights(best_ckpt)
+        except Exception as exc:
+            print(f"load_weights failed ({exc}); retrying via load_model with custom_objects")
+            model = tf.keras.models.load_model(best_ckpt,
+                custom_objects=SEGMENTATION_CUSTOM_OBJECTS)
 
     model.save(os.path.join(WEIGHTS_DIR, "segmentation_model.keras"))
     test_ds = build_segmentation_dataset_from_paths(
         test_img, test_msk, img_size=seg_size, batch_size=cfg.batch_size,
         shuffle=False, augment=False,
     )
-    metrics = evaluate_segmentation(model, test_ds=test_ds)
+    metrics = evaluate_segmentation(model,
+        test_ds=test_ds)
     plot_loss_curves(history, save_path=os.path.join(LOG_DIR, "segmentation", "loss_curves.png"))
     return model, history, metrics
 
 
-def train_classifier(data_dir=None, use_enhanced=True, epochs=None, resume=True, patient_level=False):
+def train_classifier(data_dir=None, use_enhanced=True, epochs=None, resume=True,
+    patient_level=False):
     print("\n" + "=" * 60)
     print("TRACK 3 - CLASSIFICATION")
     print("=" * 60)
 
     if patient_level or os.getenv("PATIENT_LEVEL_SPLIT", "0") == "1":
         print("Using patient-level split (grouped by patient ID)")
-        (X_train_paths, y_train), (X_val_paths, y_val), (X_test_paths, y_test) = get_figshare_patient_level_split(data_dir)
+        (X_train_paths, y_train), (X_val_paths, y_val), (X_test_paths,
+            y_test) = get_figshare_patient_level_split(data_dir)
     else:
-        (X_train_paths, y_train), (X_val_paths, y_val), (X_test_paths, y_test) = get_figshare_train_val_test_split(data_dir)
+        (X_train_paths, y_train), (X_val_paths, y_val), (X_test_paths,
+            y_test) = get_figshare_train_val_test_split(data_dir)
 
     cfg = TRACK_CONFIGS["classifier"]
-    train_ds = build_classifier_dataset_from_paths(X_train_paths, y_train, img_size=IMG_CFG.classifier_size, batch_size=cfg.batch_size)
+    train_ds = build_classifier_dataset_from_paths(X_train_paths, y_train,
+        img_size=IMG_CFG.classifier_size, batch_size=cfg.batch_size)
     val_ds = build_classifier_dataset_from_paths(
-        X_val_paths, y_val, img_size=IMG_CFG.classifier_size, batch_size=cfg.batch_size, shuffle=False, augment=False
+        X_val_paths, y_val, img_size=IMG_CFG.classifier_size, batch_size=cfg.batch_size,
+            shuffle=False, augment=False
     )
 
     state = TrainingState("classifier")
@@ -581,7 +675,14 @@ def train_classifier(data_dir=None, use_enhanced=True, epochs=None, resume=True,
         model = tf.keras.models.load_model(ckpt)
         initial_epoch = state.start_epoch()
     else:
-        model = build_classifier(num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1)) if use_enhanced else build_classifier_baseline(num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1))
+        if use_enhanced:
+            model = build_classifier(
+                num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1)
+            )
+        else:
+            model = build_classifier_baseline(
+                num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1)
+            )
 
     class StateSaver(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs=None):
@@ -598,7 +699,8 @@ def train_classifier(data_dir=None, use_enhanced=True, epochs=None, resume=True,
             validation_data=val_ds,
             initial_epoch=initial_epoch,
             epochs=total_epochs,
-            callbacks=get_standard_callbacks(model, "classifier") + [StateSaver()],
+            shuffle=False,
+            callbacks=get_standard_callbacks(model, "classifier", resume=resume) + [StateSaver()],
         )
 
     best_ckpt = state.checkpoint_path()
@@ -616,38 +718,55 @@ def train_classifier(data_dir=None, use_enhanced=True, epochs=None, resume=True,
 
 
 def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=10, resume=True):
+    """Train a GAN under a float32 precision policy that is always restored."""
+    with _float32_precision():
+        return _train_gan_impl(
+            data_dir=data_dir,
+            gan_type=gan_type,
+            epochs=epochs,
+            fid_eval_freq=fid_eval_freq,
+            resume=resume,
+        )
+
+
+def _train_gan_impl(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=10,
+    resume=True):
     print("\n" + "=" * 60)
     print(f"TRACK 4 - GAN ({gan_type.upper()})")
     print("=" * 60)
 
-    (X_train_paths, y_train_labels), (X_val_paths, y_val_labels), _ = get_figshare_train_val_test_split(data_dir)
+    (X_train_paths, y_train_labels), (X_val_paths,
+        y_val_labels), _ = get_figshare_train_val_test_split(data_dir)
     cfg = TRACK_CONFIGS["gan"]
     fid_eval_freq = int(os.getenv("GAN_FID_EVAL_FREQ", str(fid_eval_freq)))
     fid_eval_freq = max(0, fid_eval_freq)
     img_shape = (*IMG_CFG.gan_size, 1)
 
+    # Note: the combined `build_gan` / `build_conditional_gan` wrapper model is
+    # deliberately not used here. It flips `discriminator.trainable` on and off
+    # and compiles a joint graph, while this loop drives the two networks with
+    # explicit TTUR `train_d` / `train_g` steps instead.
     conditional = False
     if gan_type == "baseline":
         generator = build_baseline_generator(latent_dim=LATENT_DIM)
         discriminator = build_baseline_discriminator(input_shape=(64, 64, 1))
         images_for_train = X_train_paths
-        gan = build_gan(generator, discriminator, latent_dim=LATENT_DIM, lr=cfg.learning_rate)
     elif gan_type == "dcgan":
-        generator = build_generator(latent_dim=LATENT_DIM, output_shape=img_shape)
+        generator = build_generator(latent_dim=LATENT_DIM,
+            output_shape=img_shape)
         discriminator = build_discriminator(input_shape=img_shape)
         images_for_train = X_train_paths
-        gan = build_gan(generator, discriminator, latent_dim=LATENT_DIM, lr=cfg.learning_rate)
     elif gan_type == "conditional":
-        generator = build_conditional_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, output_shape=img_shape)
-        discriminator = build_conditional_discriminator(input_shape=img_shape, num_classes=NUM_CLASSES)
+        generator = build_conditional_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES,
+            output_shape=img_shape)
+        discriminator = build_conditional_discriminator(input_shape=img_shape,
+            num_classes=NUM_CLASSES)
         images_for_train = X_train_paths
-        gan = build_conditional_gan(generator, discriminator, latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, lr=cfg.learning_rate)
         conditional = True
     elif gan_type == "stylegan":
         generator = build_stylegan_generator(latent_dim=LATENT_DIM, output_shape=img_shape)
         discriminator = build_discriminator(input_shape=img_shape)
         images_for_train = X_train_paths
-        gan = build_gan(generator, discriminator, latent_dim=LATENT_DIM, lr=cfg.learning_rate)
     else:
         raise ValueError(f"Unknown GAN type: {gan_type}")
 
@@ -661,10 +780,6 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
         print("Loading GAN checkpoints...")
         generator = tf.keras.models.load_model(state.generator_ckpt())
         discriminator = tf.keras.models.load_model(state.discriminator_ckpt())
-        if conditional:
-            gan = build_conditional_gan(generator, discriminator, latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, lr=cfg.learning_rate)
-        else:
-            gan = build_gan(generator, discriminator, latent_dim=LATENT_DIM, lr=cfg.learning_rate)
         initial_epoch = state.start_epoch()
 
     gan_img_size = (64, 64) if gan_type == "baseline" else IMG_CFG.gan_size
@@ -705,13 +820,24 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
     gan_early_stop_patience = int(os.getenv("GAN_EARLY_STOP_PATIENCE", "3"))
     gan_target_fid = float(os.getenv("GAN_TARGET_FID", "0") or 0)
     gan_target_fs = float(os.getenv("GAN_TARGET_FS", "0") or 0)
-    gan_d_steps = max(1, int(os.getenv("GAN_D_STEPS", "1")))
-    gan_g_steps = max(1, int(os.getenv("GAN_G_STEPS", "2")))
-    gan_recovery_mode = os.getenv("GAN_RECOVERY_MODE", "0").strip().lower() in {"1", "true", "yes", "on"}
-    gan_diversity_weight = float(os.getenv("GAN_DIVERSITY_WEIGHT", "0.0") or 0.0)
+    gan_d_steps = max(1, int(os.getenv("GAN_D_STEPS",
+        "1")))
+    gan_g_steps = max(1, int(os.getenv("GAN_G_STEPS",
+        "2")))
+    # Restore the anti-collapse step/LR tuning that was in effect when the run
+    # was interrupted; it is part of the optimiser state, not a fresh default.
+    saved_g_steps = state.state.get("g_steps")
+    if resume and saved_g_steps:
+        gan_g_steps = max(1, int(saved_g_steps))
+    gan_recovery_mode = os.getenv("GAN_RECOVERY_MODE", "0").strip().lower() in {"1", "true", "yes",
+        "on"}
+    gan_diversity_weight = float(os.getenv("GAN_DIVERSITY_WEIGHT",
+        "0.0") or 0.0)
     gan_class_guidance_weight = float(os.getenv("GAN_CLASS_GUIDANCE_WEIGHT", "0.0") or 0.0)
-    gan_preview_freq = max(1, int(os.getenv("GAN_PREVIEW_FREQ", "5")))
-    gan_shake_on_collapse = os.getenv("GAN_SHAKE_ON_COLLAPSE", "0").strip().lower() in {"1", "true", "yes", "on"}
+    gan_preview_freq = max(1, int(os.getenv("GAN_PREVIEW_FREQ",
+        "5")))
+    gan_shake_on_collapse = os.getenv("GAN_SHAKE_ON_COLLAPSE", "0").strip().lower() in {"1", "true",
+        "yes", "on"}
     gan_shake_std = float(os.getenv("GAN_SHAKE_STD", "0.0005") or 0.0005)
     gan_grad_clip_norm = float(os.getenv("GAN_GRAD_CLIP_NORM", "5.0") or 5.0)
     if gan_recovery_mode:
@@ -724,11 +850,6 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
         if not gan_shake_on_collapse:
             gan_shake_on_collapse = True
 
-    original_policy = tf.keras.mixed_precision.global_policy()
-    if original_policy.name != "float32":
-        print(f"GAN: switching from {original_policy.name} to float32 (BCE + low VRAM = NaN risk)")
-        tf.keras.mixed_precision.set_global_policy("float32")
-
     bce = tf.keras.losses.BinaryCrossentropy()
 
     # --- Create fresh optimizers with TTUR (Two-Timescale Update Rule) ---
@@ -738,15 +859,18 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
     if gan_recovery_mode:
         d_lr_base *= 0.5
         g_lr_base *= 1.25
-    d_optimizer = tf.keras.optimizers.Adam(d_lr_base, beta_1=0.5, beta_2=0.999)
-    g_optimizer = tf.keras.optimizers.Adam(g_lr_base, beta_1=0.5, beta_2=0.999)
+    d_optimizer = tf.keras.optimizers.Adam(d_lr_base, beta_1=0.5,
+        beta_2=0.999)
+    g_optimizer = tf.keras.optimizers.Adam(g_lr_base, beta_1=0.5,
+        beta_2=0.999)
 
     classifier_guidance_model = None
     if conditional and gan_class_guidance_weight > 0:
         classifier_path = os.path.join(WEIGHTS_DIR, "classifier_model.keras")
         if os.path.exists(classifier_path):
             try:
-                classifier_guidance_model = tf.keras.models.load_model(classifier_path, compile=False)
+                classifier_guidance_model = tf.keras.models.load_model(classifier_path,
+                    compile=False)
                 classifier_guidance_model.trainable = False
                 print(f"GAN class-guidance enabled from: {classifier_path}")
             except Exception as e:
@@ -758,21 +882,27 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
     @tf.function
     def train_d(real_images, real_labels=None, instance_noise_std=0.0):
         bs = tf.shape(real_images)[0]
-        noise = tf.random.normal([bs, LATENT_DIM])
+        noise = tf.random.normal([bs,
+            LATENT_DIM])
         with tf.GradientTape() as tape:
             if conditional and real_labels is not None:
                 fake = generator([noise, real_labels], training=True)
-                fake = tf.where(tf.math.is_finite(fake), fake, tf.zeros_like(fake))
+                fake = tf.where(tf.math.is_finite(fake), fake,
+                    tf.zeros_like(fake))
                 if instance_noise_std > 0:
-                    real_noise_std = tf.cast(instance_noise_std, real_images.dtype)
+                    real_noise_std = tf.cast(instance_noise_std,
+                        real_images.dtype)
                     fake_noise_std = tf.cast(instance_noise_std, fake.dtype)
                     real_images_noisy = tf.clip_by_value(
-                        real_images + tf.random.normal(tf.shape(real_images), stddev=real_noise_std, dtype=real_images.dtype),
-                        tf.cast(-1.0, real_images.dtype),
+                        real_images + tf.random.normal(tf.shape(real_images), stddev=real_noise_std,
+                            dtype=real_images.dtype),
+                        tf.cast(-1.0,
+                            real_images.dtype),
                         tf.cast(1.0, real_images.dtype),
                     )
                     fake_noisy = tf.clip_by_value(
-                        fake + tf.random.normal(tf.shape(fake), stddev=fake_noise_std, dtype=fake.dtype),
+                        fake + tf.random.normal(tf.shape(fake), stddev=fake_noise_std,
+                            dtype=fake.dtype),
                         tf.cast(-1.0, fake.dtype),
                         tf.cast(1.0, fake.dtype),
                     )
@@ -780,20 +910,27 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
                     real_images_noisy = real_images
                     fake_noisy = fake
                 real_out = discriminator([real_images_noisy, real_labels], training=True)
-                fake_out = discriminator([fake_noisy, real_labels], training=True)
+                fake_out = discriminator([fake_noisy, real_labels],
+                    training=True)
             else:
-                fake = generator(noise, training=True)
-                fake = tf.where(tf.math.is_finite(fake), fake, tf.zeros_like(fake))
+                fake = generator(noise,
+                    training=True)
+                fake = tf.where(tf.math.is_finite(fake),
+                    fake,
+                    tf.zeros_like(fake))
                 if instance_noise_std > 0:
                     real_noise_std = tf.cast(instance_noise_std, real_images.dtype)
-                    fake_noise_std = tf.cast(instance_noise_std, fake.dtype)
+                    fake_noise_std = tf.cast(instance_noise_std,
+                        fake.dtype)
                     real_images_noisy = tf.clip_by_value(
-                        real_images + tf.random.normal(tf.shape(real_images), stddev=real_noise_std, dtype=real_images.dtype),
+                        real_images + tf.random.normal(tf.shape(real_images), stddev=real_noise_std,
+                            dtype=real_images.dtype),
                         tf.cast(-1.0, real_images.dtype),
                         tf.cast(1.0, real_images.dtype),
                     )
                     fake_noisy = tf.clip_by_value(
-                        fake + tf.random.normal(tf.shape(fake), stddev=fake_noise_std, dtype=fake.dtype),
+                        fake + tf.random.normal(tf.shape(fake), stddev=fake_noise_std,
+                            dtype=fake.dtype),
                         tf.cast(-1.0, fake.dtype),
                         tf.cast(1.0, fake.dtype),
                     )
@@ -814,7 +951,7 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
         grads = _sanitize_grads(grads, discriminator.trainable_variables)
         if gan_grad_clip_norm > 0:
             grads, _ = tf.clip_by_global_norm(grads, gan_grad_clip_norm)
-        d_optimizer.apply_gradients(zip(grads, discriminator.trainable_variables))
+        d_optimizer.apply_gradients(zip(grads, discriminator.trainable_variables, strict=True))
         return d_loss, real_out, fake_out
 
     @tf.function
@@ -824,32 +961,50 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
             if conditional and labels is not None:
                 fake = generator([noise, labels], training=True)
                 fake = tf.where(tf.math.is_finite(fake), fake, tf.zeros_like(fake))
-                fake_out = discriminator([fake, labels], training=True)
+                fake_out = discriminator([fake, labels],
+                    training=True)
             else:
-                fake = generator(noise, training=True)
-                fake = tf.where(tf.math.is_finite(fake), fake, tf.zeros_like(fake))
-                fake_out = discriminator(fake, training=True)
+                fake = generator(noise,
+                    training=True)
+                fake = tf.where(tf.math.is_finite(fake),
+                    fake,
+                    tf.zeros_like(fake))
+                fake_out = discriminator(fake,
+                    training=True)
             fake_out = tf.where(tf.math.is_finite(fake_out), fake_out, tf.zeros_like(fake_out))
-            adv_loss = bce(tf.ones_like(fake_out), fake_out)
+            adv_loss = bce(tf.ones_like(fake_out),
+                fake_out)
             g_loss = adv_loss
 
-            if conditional and labels is not None and classifier_guidance_model is not None and gan_class_guidance_weight > 0:
-                fake_for_cls = tf.clip_by_value((fake + 1.0) / 2.0, 0.0, 1.0)
+            if (
+                conditional
+                and labels is not None
+                and classifier_guidance_model is not None
+                and gan_class_guidance_weight > 0
+            ):
+                fake_for_cls = tf.clip_by_value((fake + 1.0) / 2.0, 0.0,
+                    1.0)
                 fake_for_cls = tf.image.resize(fake_for_cls, IMG_CFG.classifier_size)
-                cls_probs = classifier_guidance_model(fake_for_cls, training=False)
-                cls_targets = tf.cast(labels, cls_probs.dtype)
-                cls_loss = tf.reduce_mean(tf.keras.losses.categorical_crossentropy(cls_targets, cls_probs))
-                g_loss = g_loss + tf.cast(gan_class_guidance_weight, g_loss.dtype) * tf.cast(cls_loss, g_loss.dtype)
+                cls_probs = classifier_guidance_model(fake_for_cls,
+                    training=False)
+                cls_targets = tf.cast(labels,
+                    cls_probs.dtype)
+                cls_loss = tf.reduce_mean(tf.keras.losses.categorical_crossentropy(cls_targets,
+                    cls_probs))
+                g_loss = g_loss + tf.cast(gan_class_guidance_weight,
+                    g_loss.dtype) * tf.cast(cls_loss, g_loss.dtype)
 
             if gan_diversity_weight > 0:
-                diversity_score = tf.reduce_mean(tf.math.reduce_std(fake, axis=0))
-                g_loss = g_loss - tf.cast(gan_diversity_weight, g_loss.dtype) * tf.cast(diversity_score, g_loss.dtype)
+                diversity_score = tf.reduce_mean(tf.math.reduce_std(fake,
+                    axis=0))
+                g_loss = g_loss - tf.cast(gan_diversity_weight,
+                    g_loss.dtype) * tf.cast(diversity_score, g_loss.dtype)
             g_loss = tf.where(tf.math.is_finite(g_loss), g_loss, tf.cast(1e6, g_loss.dtype))
         grads = tape.gradient(g_loss, generator.trainable_variables)
         grads = _sanitize_grads(grads, generator.trainable_variables)
         if gan_grad_clip_norm > 0:
             grads, _ = tf.clip_by_global_norm(grads, gan_grad_clip_norm)
-        g_optimizer.apply_gradients(zip(grads, generator.trainable_variables))
+        g_optimizer.apply_gradients(zip(grads, generator.trainable_variables, strict=True))
         return g_loss
 
     total_epochs = epochs or cfg.epochs
@@ -901,21 +1056,32 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
             # Skip D training if frozen due to severe collapse
             if not d_frozen_this_epoch:
                 for _ in range(gan_d_steps):
-                    d_loss, real_out, fake_out = train_d(real_images, labels, instance_noise_tf)
+                    d_loss, real_out, fake_out = train_d(real_images, labels,
+                        instance_noise_tf)
             else:
                 # Still need d_loss/real_out/fake_out for logging
-                noise_probe = tf.random.normal([bs, LATENT_DIM])
+                noise_probe = tf.random.normal([bs,
+                    LATENT_DIM])
                 if conditional and labels is not None:
-                    fake_probe = generator([noise_probe, labels], training=False)
-                    fake_probe = tf.where(tf.math.is_finite(fake_probe), fake_probe, tf.zeros_like(fake_probe))
+                    fake_probe = generator([noise_probe,
+                        labels],
+                        training=False)
+                    fake_probe = tf.where(tf.math.is_finite(fake_probe), fake_probe,
+                        tf.zeros_like(fake_probe))
                     real_out = discriminator([real_images, labels], training=False)
-                    fake_out = discriminator([fake_probe, labels], training=False)
+                    fake_out = discriminator([fake_probe, labels],
+                        training=False)
                 else:
-                    fake_probe = generator(noise_probe, training=False)
-                    fake_probe = tf.where(tf.math.is_finite(fake_probe), fake_probe, tf.zeros_like(fake_probe))
-                    real_out = discriminator(real_images, training=False)
-                    fake_out = discriminator(fake_probe, training=False)
-                d_loss = bce(tf.ones_like(real_out), real_out) + bce(tf.zeros_like(fake_out), fake_out)
+                    fake_probe = generator(noise_probe,
+                        training=False)
+                    fake_probe = tf.where(tf.math.is_finite(fake_probe), fake_probe,
+                        tf.zeros_like(fake_probe))
+                    real_out = discriminator(real_images,
+                        training=False)
+                    fake_out = discriminator(fake_probe,
+                        training=False)
+                d_loss = bce(tf.ones_like(real_out), real_out) + bce(tf.zeros_like(fake_out),
+                    fake_out)
 
             g_step_losses = []
             for _ in range(gan_g_steps):
@@ -959,11 +1125,16 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
         g_losses.append(g_avg)
         d_accs.append(d_acc)
         g_accs.append(g_acc)
-        loss_logger.log_step(epoch, d_avg, g_avg, d_acc, g_acc)
+        loss_logger.log_step(epoch, d_avg, g_avg, d_acc,
+            g_acc)
 
         elapsed = time.time() - start
         extra_info = " [D frozen]" if d_frozen_this_epoch else ""
-        print(f"Epoch {epoch + 1}/{total_epochs} [{elapsed:.1f}s] D:{d_avg:.4f} G:{g_avg:.4f} Dacc:{d_acc:.4f} Gacc:{g_acc:.4f}{extra_info}")
+        print(
+            f"Epoch {epoch + 1}/{total_epochs} [{elapsed:.1f}s] "
+            f"D:{d_avg:.4f} G:{g_avg:.4f} "
+            f"Dacc:{d_acc:.4f} Gacc:{g_acc:.4f}{extra_info}"
+        )
 
         # --- Stronger anti-collapse rescue ---
         d_frozen_this_epoch = False
@@ -978,21 +1149,26 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
                 d_frozen_this_epoch = True
                 print("  🔧 Severe collapse: freezing D for next epoch + resetting D final layer")
                 for var in discriminator.trainable_variables:
-                    if 'dense' in var.name.lower() and ('kernel' in var.name.lower() or 'weight' in var.name.lower()):
+                    name = var.name.lower()
+                    if "dense" in name and ("kernel" in name or "weight" in name):
                         if var.shape[-1] == 1:
-                            var.assign(tf.random.truncated_normal(var.shape, stddev=0.02, dtype=var.dtype))
+                            var.assign(tf.random.truncated_normal(var.shape, stddev=0.02,
+                                dtype=var.dtype))
                 consecutive_collapse_epochs = 0
 
             # Always apply standard rescue measures
-            gan_g_steps = min(6, gan_g_steps + 1)
+            gan_g_steps = min(6,
+                gan_g_steps + 1)
             try:
-                new_d_lr = max(1e-6, float(tf.keras.backend.get_value(d_optimizer.learning_rate)) * 0.5)
+                new_d_lr = max(1e-6,
+                    float(tf.keras.backend.get_value(d_optimizer.learning_rate)) * 0.5)
                 d_optimizer.learning_rate = new_d_lr
             except Exception:
                 pass
             if gan_shake_on_collapse and gan_shake_std > 0:
                 for var in generator.trainable_variables:
-                    var.assign_add(tf.random.normal(tf.shape(var), stddev=gan_shake_std, dtype=var.dtype))
+                    var.assign_add(tf.random.normal(tf.shape(var), stddev=gan_shake_std,
+                        dtype=var.dtype))
             print(
                 f"  Anti-collapse: g_steps={gan_g_steps}, "
                 f"d_lr={float(tf.keras.backend.get_value(d_optimizer.learning_rate)):.2e}"
@@ -1002,13 +1178,17 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
 
         generator_is_finite = _generator_is_finite(generator, conditional, NUM_CLASSES)
         if not generator_is_finite:
-            print("Generator health probe failed (non-finite output); skipping preview/checkpoint for this epoch.")
+            print(
+                "Generator health probe failed (non-finite output); "
+                "skipping preview/checkpoint for this epoch."
+            )
 
         if generator_is_finite and ((epoch + 1) % 5 == 0 or epoch == total_epochs - 1):
             generator.save(state.generator_ckpt())
             discriminator.save(state.discriminator_ckpt())
 
-        if generator_is_finite and ((epoch + 1) % gan_preview_freq == 0 or epoch == total_epochs - 1):
+        preview_due = (epoch + 1) % gan_preview_freq == 0 or epoch == total_epochs - 1
+        if generator_is_finite and preview_due:
             sampler._generate_and_save(epoch)
 
         stop_gan_early = False
@@ -1024,19 +1204,25 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
                     chunk_size = min(gen_batch_size, n_eval - i)
                     z_chunk = tf.random.normal([chunk_size, LATENT_DIM])
                     if conditional:
-                        eval_labels_chunk = tf.one_hot(real_eval_labels[i:i+chunk_size], NUM_CLASSES)
+                        eval_labels_chunk = tf.one_hot(real_eval_labels[i:i+chunk_size],
+                            NUM_CLASSES)
                         eval_labels_chunk = tf.cast(eval_labels_chunk, tf.float32)
-                        gen_chunk = generator([z_chunk, eval_labels_chunk], training=False)
+                        gen_chunk = generator([z_chunk, eval_labels_chunk],
+                            training=False)
                     else:
-                        gen_chunk = generator(z_chunk, training=False)
-                    gen_chunk = tf.where(tf.math.is_finite(gen_chunk), gen_chunk, tf.zeros_like(gen_chunk))
+                        gen_chunk = generator(z_chunk,
+                            training=False)
+                    gen_chunk = tf.where(tf.math.is_finite(gen_chunk), gen_chunk,
+                        tf.zeros_like(gen_chunk))
                     gen_chunks.append(gen_chunk.numpy())
                 gen = np.concatenate(gen_chunks, axis=0)
                 gen = np.clip((gen + 1.0) / 2.0, 0.0, 1.0)
-                real_eval = load_images_from_paths(real_eval_paths[:n_eval], img_size=gan_img_size)
+                real_eval = load_images_from_paths(real_eval_paths[:n_eval],
+                    img_size=gan_img_size)
                 try:
                     fid = calculate_fid(real_eval, gen)
-                    fs = calculate_fs(real_eval, gen)
+                    fs = calculate_fs(real_eval,
+                        gen)
                     fid_scores.append(float(fid))
                     fs_scores.append(float(fs))
                     print(f"FID: {fid:.2f} FS: {fs:.2f}")
@@ -1048,11 +1234,22 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
                     else:
                         gan_no_improve += 1
 
-                    if gan_target_fid > 0 and gan_target_fs > 0 and fid <= gan_target_fid and fs <= gan_target_fs:
-                        print(f"GAN quality target reached (FID<={gan_target_fid}, FS<={gan_target_fs}); stopping early.")
+                    if (
+                        gan_target_fid > 0
+                        and gan_target_fs > 0
+                        and fid <= gan_target_fid
+                        and fs <= gan_target_fs
+                    ):
+                        print(
+                            f"GAN quality target reached "
+                            f"(FID<={gan_target_fid}, FS<={gan_target_fs}); stopping early."
+                        )
                         stop_gan_early = True
                     elif gan_early_stop_patience > 0 and gan_no_improve >= gan_early_stop_patience:
-                        print(f"GAN quality plateau detected for {gan_no_improve} evaluation cycles; stopping early.")
+                        print(
+                            f"GAN quality plateau detected for {gan_no_improve} "
+                            "evaluation cycles; stopping early."
+                        )
                         stop_gan_early = True
                 except Exception as e:
                     print(f"FID/FS computation error: {e}")
@@ -1074,29 +1271,32 @@ def train_gan(data_dir=None, gan_type="conditional", epochs=None, fid_eval_freq=
         if stop_gan_early:
             break
 
-    generator.save(os.path.join(WEIGHTS_DIR, f"generator_{gan_type}.keras"))
-    discriminator.save(os.path.join(WEIGHTS_DIR, f"discriminator_{gan_type}.keras"))
+    generator.save(os.path.join(WEIGHTS_DIR,
+        f"generator_{gan_type}.keras"))
+    discriminator.save(os.path.join(WEIGHTS_DIR,
+        f"discriminator_{gan_type}.keras"))
 
-    gan_log_dir = os.path.join(LOG_DIR, "gan")
-    os.makedirs(gan_log_dir, exist_ok=True)
-    plot_gan_losses(d_losses, g_losses, d_accs, g_accs, save_path=os.path.join(gan_log_dir, "loss_curves.png"))
+    gan_log_dir = os.path.join(LOG_DIR,
+        "gan")
+    os.makedirs(gan_log_dir,
+        exist_ok=True)
+    plot_gan_losses(d_losses, g_losses, d_accs, g_accs, save_path=os.path.join(gan_log_dir,
+        "loss_curves.png"))
     if fid_scores:
-        plot_fid_fs_vs_epochs(fid_scores, fs_scores, save_path=os.path.join(gan_log_dir, "fid_fs_curves.png"))
-
-    # Restore original mixed precision policy for other tracks
-    if original_policy.name != "float32":
-        tf.keras.mixed_precision.set_global_policy(original_policy)
-        print(f"Restored mixed precision policy: {original_policy.name}")
+        plot_fid_fs_vs_epochs(fid_scores, fs_scores, save_path=os.path.join(gan_log_dir,
+            "fid_fs_curves.png"))
 
     return generator, discriminator, loss_logger, fid_scores, fs_scores
 
 
-def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", ratio=0.5, epochs=None, resume=True):
+def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", ratio=0.5,
+    epochs=None, resume=True):
     print("\n" + "=" * 60)
     print("GAN AUGMENTED CLASSIFIER")
     print("=" * 60)
 
-    images, labels = load_figshare_dataset(data_dir, img_size=IMG_CFG.classifier_size)
+    images, labels = load_figshare_dataset(data_dir,
+        img_size=IMG_CFG.classifier_size)
     (X_train, y_train), (X_val, y_val), (X_test, y_test) = split_data(images, labels)
     cfg = TRACK_CONFIGS["classifier"]
 
@@ -1105,15 +1305,20 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
         baseline_model = tf.keras.models.load_model(baseline_state.checkpoint_path())
         baseline_start = baseline_state.start_epoch()
     else:
-        baseline_model = build_classifier(num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1))
+        baseline_model = build_classifier(num_classes=NUM_CLASSES,
+            input_shape=(*IMG_CFG.classifier_size, 1))
         baseline_start = 0
 
-    train_ds = build_classifier_dataset(X_train, y_train, batch_size=cfg.batch_size)
-    val_ds = build_classifier_dataset(X_val, y_val, batch_size=cfg.batch_size, shuffle=False, augment=False)
+    train_ds = build_classifier_dataset(X_train,
+        y_train,
+        batch_size=cfg.batch_size)
+    val_ds = build_classifier_dataset(X_val, y_val, batch_size=cfg.batch_size, shuffle=False,
+        augment=False)
 
     class BaselineSaver(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs=None):
-            baseline_model.save(os.path.join(CHECKPOINT_DIR, "classifier_baseline", "last_model.keras"))
+            baseline_model.save(os.path.join(CHECKPOINT_DIR, "classifier_baseline",
+                "last_model.keras"))
             baseline_state.update_epoch(epoch)
 
     total_epochs = epochs or cfg.epochs
@@ -1123,11 +1328,15 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
             validation_data=val_ds,
             initial_epoch=baseline_start,
             epochs=total_epochs,
-            callbacks=get_standard_callbacks(baseline_model, "classifier_baseline") + [BaselineSaver()],
+            shuffle=False,
+            callbacks=get_standard_callbacks(baseline_model, "classifier_baseline",
+                resume=resume) + [BaselineSaver()],
         )
 
-    y_test_oh = tf.keras.utils.to_categorical(y_test, num_classes=NUM_CLASSES)
-    baseline_metrics = evaluate_classifier(baseline_model, X_test, y_test_oh, track_name="classifier_baseline")
+    y_test_oh = tf.keras.utils.to_categorical(y_test,
+        num_classes=NUM_CLASSES)
+    baseline_metrics = evaluate_classifier(baseline_model, X_test, y_test_oh,
+        track_name="classifier_baseline")
 
     n_synth = int(len(X_train) * ratio)
     if gan_type == "conditional":
@@ -1138,16 +1347,20 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
             zc = tf.random.normal([per_class, LATENT_DIM])
             lc = tf.one_hot(tf.constant([c] * per_class), NUM_CLASSES)
             gc = generator([zc, lc], training=False).numpy()
-            gc = np.clip((gc + 1.0) / 2.0, 0.0, 1.0)
+            gc = np.clip((gc + 1.0) / 2.0, 0.0,
+                1.0)
             gc = tf.image.resize(gc, IMG_CFG.classifier_size).numpy()
             syn_imgs.append(gc)
             syn_lbls.extend([c] * per_class)
         syn_imgs = np.concatenate(syn_imgs, axis=0)
         syn_lbls = np.array(syn_lbls, dtype=np.int32)
     else:
-        z = tf.random.normal([n_synth, LATENT_DIM])
-        gi = generator(z, training=False).numpy()
-        syn_imgs = np.clip((gi + 1.0) / 2.0, 0.0, 1.0)
+        z = tf.random.normal([n_synth,
+            LATENT_DIM])
+        gi = generator(z,
+            training=False).numpy()
+        syn_imgs = np.clip((gi + 1.0) / 2.0, 0.0,
+            1.0)
         syn_imgs = tf.image.resize(syn_imgs, IMG_CFG.classifier_size).numpy()
         syn_lbls = np.random.randint(0, NUM_CLASSES, size=len(syn_imgs))
 
@@ -1158,14 +1371,17 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
         aug_model = tf.keras.models.load_model(aug_state.checkpoint_path())
         aug_start = aug_state.start_epoch()
     else:
-        aug_model = build_classifier(num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size, 1))
+        aug_model = build_classifier(num_classes=NUM_CLASSES, input_shape=(*IMG_CFG.classifier_size,
+            1))
         aug_start = 0
 
-    train_aug_ds = build_classifier_dataset(mixed_X, mixed_y, batch_size=cfg.batch_size)
+    train_aug_ds = build_classifier_dataset(mixed_X, mixed_y,
+        batch_size=cfg.batch_size)
 
     class AugSaver(tf.keras.callbacks.Callback):
         def on_epoch_end(self, epoch, logs=None):
-            aug_model.save(os.path.join(CHECKPOINT_DIR, "classifier_augmented", "last_model.keras"))
+            aug_model.save(os.path.join(CHECKPOINT_DIR, "classifier_augmented",
+                "last_model.keras"))
             aug_state.update_epoch(epoch)
 
     if aug_start < total_epochs:
@@ -1174,10 +1390,13 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
             validation_data=val_ds,
             initial_epoch=aug_start,
             epochs=total_epochs,
-            callbacks=get_standard_callbacks(aug_model, "classifier_augmented") + [AugSaver()],
+            shuffle=False,
+            callbacks=get_standard_callbacks(aug_model, "classifier_augmented",
+                resume=resume) + [AugSaver()],
         )
 
-    aug_metrics = evaluate_classifier(aug_model, X_test, y_test_oh, track_name="classifier_augmented")
+    aug_metrics = evaluate_classifier(aug_model, X_test, y_test_oh,
+        track_name="classifier_augmented")
     print(f"Baseline acc: {baseline_metrics['accuracy']:.4f}")
     print(f"Augmented acc: {aug_metrics['accuracy']:.4f}")
     print(f"Improvement: {aug_metrics['accuracy'] - baseline_metrics['accuracy']:.4f}")
@@ -1189,6 +1408,15 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
 
 
 def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
+    """Train the v2 WGAN-GP under a float32 policy that is always restored."""
+    with _float32_precision():
+        return _train_gan_v2_impl(
+            data_dir=data_dir, epochs=epochs, fid_eval_freq=fid_eval_freq, resume=resume
+        )
+
+
+def _train_gan_v2_impl(data_dir=None, epochs=None, fid_eval_freq=10,
+    resume=True):
     """V2 GAN training: ResNet generator + Projection discriminator + WGAN-GP.
 
     This is a research-grade conditional GAN with:
@@ -1202,14 +1430,18 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
     print("TRACK 4 - GAN V2 (WGAN-GP + ResNet + Projection)")
     print("=" * 60)
 
-    (X_train_paths, y_train_labels), (X_val_paths, y_val_labels), _ = get_figshare_train_val_test_split(data_dir)
+    (X_train_paths, y_train_labels), (X_val_paths,
+        y_val_labels), _ = get_figshare_train_val_test_split(data_dir)
     cfg = TRACK_CONFIGS["gan"]
     fid_eval_freq = int(os.getenv("GAN_FID_EVAL_FREQ", str(fid_eval_freq)))
-    fid_eval_freq = max(0, fid_eval_freq)
-    img_shape = (*IMG_CFG.gan_size, 1)
+    fid_eval_freq = max(0,
+        fid_eval_freq)
+    img_shape = (*IMG_CFG.gan_size,
+        1)
 
     # Build v2 models
-    generator = build_v2_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES, output_shape=img_shape)
+    generator = build_v2_generator(latent_dim=LATENT_DIM, num_classes=NUM_CLASSES,
+        output_shape=img_shape)
     discriminator = build_v2_discriminator(input_shape=img_shape, num_classes=NUM_CLASSES)
 
     state = GANState("v2")
@@ -1240,12 +1472,15 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
     )
 
     # EMA for generator
-    ema = EMAGenerator(generator, decay=0.999)
+    ema = EMAGenerator(generator,
+        decay=0.999)
 
     loss_logger = GANLossLogger(
-        columns=["epoch", "d_loss", "g_loss", "w_dist", "g_acc"],
+        columns=["epoch", "d_loss", "g_loss", "w_dist",
+            "g_acc"],
     )
-    sampler = GANImageSampler(generator, latent_dim=LATENT_DIM, conditional=True, num_classes=NUM_CLASSES)
+    sampler = GANImageSampler(generator, latent_dim=LATENT_DIM, conditional=True,
+        num_classes=NUM_CLASSES)
     collapse_detector = ModelCollapseDetector(
         generator, latent_dim=LATENT_DIM, conditional=True, num_classes=NUM_CLASSES,
     )
@@ -1255,7 +1490,10 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
 
     d_losses = _filter_finite(state.state.get("d_losses", []))
     g_losses = _filter_finite(state.state.get("g_losses", []))
-    w_distances = _filter_finite(state.state.get("d_accs", []))
+    # Wasserstein distances get their own state slot. They used to be written
+    # into "d_accs", so resuming a v2 run after a v1 run read accuracies in as
+    # distances (and vice versa).
+    w_distances = _filter_finite(state.state.get("w_distances", []))
     g_accs = _filter_finite(state.state.get("g_accs", []))
     fid_scores = _filter_finite(state.state.get("fid_scores", []))
     fs_scores = _filter_finite(state.state.get("fs_scores", []))
@@ -1268,12 +1506,6 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
     gan_preview_freq = max(1, int(os.getenv("GAN_PREVIEW_FREQ", "5")))
     gan_grad_clip_norm = float(os.getenv("GAN_GRAD_CLIP_NORM", "0") or 0)
     lambda_gp = float(os.getenv("GAN_LAMBDA_GP", "10.0") or 10.0)
-
-    # Ensure float32 for WGAN-GP
-    original_policy = tf.keras.mixed_precision.global_policy()
-    if original_policy.name != "float32":
-        print(f"GAN v2: switching from {original_policy.name} to float32")
-        tf.keras.mixed_precision.set_global_policy("float32")
 
     # WGAN-GP optimizers: beta1=0, beta2=0.9 (standard)
     d_lr = float(os.getenv("GAN_D_LR", "1e-4") or 1e-4)
@@ -1294,14 +1526,16 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
             d_loss_real = -tf.reduce_mean(real_out)
             d_loss_fake = tf.reduce_mean(fake_out)
 
-            # Gradient penalty
-            gp = gradient_penalty(discriminator, real_images, fake, real_labels, lambda_gp=lambda_gp)
+            # Gradient penalty (unscaled helper; lambda applied here)
+            gp = lambda_gp * gradient_penalty(discriminator, real_images, fake, real_labels)
 
             d_loss = d_loss_real + d_loss_fake + gp
 
         grads = tape.gradient(d_loss, discriminator.trainable_variables)
         grads = _sanitize_grads(grads, discriminator.trainable_variables)
-        d_optimizer.apply_gradients(zip(grads, discriminator.trainable_variables))
+        if gan_grad_clip_norm > 0:
+            grads, _ = tf.clip_by_global_norm(grads, gan_grad_clip_norm)
+        d_optimizer.apply_gradients(zip(grads, discriminator.trainable_variables, strict=True))
 
         # Wasserstein distance estimate (for logging)
         w_dist = -(d_loss_real + d_loss_fake)
@@ -1316,7 +1550,9 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
             g_loss = -tf.reduce_mean(fake_out)  # Generator wants high scores
         grads = tape.gradient(g_loss, generator.trainable_variables)
         grads = _sanitize_grads(grads, generator.trainable_variables)
-        g_optimizer.apply_gradients(zip(grads, generator.trainable_variables))
+        if gan_grad_clip_norm > 0:
+            grads, _ = tf.clip_by_global_norm(grads, gan_grad_clip_norm)
+        g_optimizer.apply_gradients(zip(grads, generator.trainable_variables, strict=True))
         return g_loss
 
     total_epochs = epochs or int(os.getenv("GAN_EPOCHS", "300"))
@@ -1391,9 +1627,8 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
 
         d_losses.append(d_avg)
         g_losses.append(g_avg)
-        w_distances.append(w_avg)  # Store W-distance in d_accs slot for logging
+        w_distances.append(w_avg)
         g_accs.append(0.0)
-        # NOTE: For WGAN-GP, the 'd_acc' column contains Wasserstein distance, not accuracy
         loss_logger.log_step(epoch, d_avg, g_avg, w_avg, 0.0)
 
         elapsed = time.time() - start
@@ -1411,32 +1646,39 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
         if generator_healthy and ((epoch + 1) % 5 == 0 or epoch == total_epochs - 1):
             generator.save_weights(state.generator_ckpt())
             discriminator.save_weights(state.discriminator_ckpt())
+            # Persist EMA weights too, otherwise a resumed run loses them.
+            ema.save(state.ema_ckpt())
 
         # Preview with EMA generator
         if generator_healthy and ((epoch + 1) % gan_preview_freq == 0 or epoch == total_epochs - 1):
-            ema.apply()
-            sampler._generate_and_save(epoch)
-            ema.restore()
+            with ema.swapped():
+                sampler._generate_and_save(epoch)
 
         # FID evaluation
         stop_early = False
         if fid_eval_freq > 0 and (epoch + 1) % fid_eval_freq == 0:
             real_eval_paths = X_val_paths if len(X_val_paths) > 0 else X_train_paths
             real_eval_labels = y_val_labels if len(X_val_paths) > 0 else y_train_labels
-            n_eval = min(64 if LOW_VRAM_MODE else 256, len(real_eval_paths))
+            n_eval = min(64 if LOW_VRAM_MODE else 256,
+                len(real_eval_paths))
             if n_eval > 0 and generator_healthy:
-                ema.apply()
                 gen_batch_size = 16 if LOW_VRAM_MODE else 64
                 gen_chunks = []
-                for i in range(0, n_eval, gen_batch_size):
-                    chunk_size = min(gen_batch_size, n_eval - i)
-                    z_chunk = tf.random.normal([chunk_size, LATENT_DIM])
-                    eval_labels_chunk = tf.one_hot(real_eval_labels[i:i+chunk_size], NUM_CLASSES)
-                    eval_labels_chunk = tf.cast(eval_labels_chunk, tf.float32)
-                    gen_chunk = generator([z_chunk, eval_labels_chunk], training=False)
-                    gen_chunk = tf.where(tf.math.is_finite(gen_chunk), gen_chunk, tf.zeros_like(gen_chunk))
-                    gen_chunks.append(gen_chunk.numpy())
-                ema.restore()
+                with ema.swapped():
+                    for i in range(0,
+                        n_eval,
+                        gen_batch_size):
+                        chunk_size = min(gen_batch_size,
+                            n_eval - i)
+                        z_chunk = tf.random.normal([chunk_size, LATENT_DIM])
+                        eval_labels_chunk = tf.one_hot(real_eval_labels[i:i+chunk_size],
+                            NUM_CLASSES)
+                        eval_labels_chunk = tf.cast(eval_labels_chunk, tf.float32)
+                        gen_chunk = generator([z_chunk, eval_labels_chunk],
+                            training=False)
+                        gen_chunk = tf.where(tf.math.is_finite(gen_chunk), gen_chunk,
+                            tf.zeros_like(gen_chunk))
+                        gen_chunks.append(gen_chunk.numpy())
                 gen = np.concatenate(gen_chunks, axis=0)
                 gen = np.clip((gen + 1.0) / 2.0, 0.0, 1.0)
                 real_eval = load_images_from_paths(real_eval_paths[:n_eval], img_size=gan_img_size)
@@ -1466,7 +1708,8 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
         state.state["last_epoch"] = epoch
         state.state["d_losses"] = _filter_finite(d_losses)
         state.state["g_losses"] = _filter_finite(g_losses)
-        state.state["d_accs"] = _filter_finite(w_distances)
+        state.state["w_distances"] = _filter_finite(w_distances)
+        state.state["d_accs"] = []
         state.state["g_accs"] = _filter_finite(g_accs)
         state.state["fid_scores"] = _filter_finite(fid_scores)
         state.state["fs_scores"] = _filter_finite(fs_scores)
@@ -1478,19 +1721,23 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True):
             break
 
     # Save final weights
-    ema.apply()
-    generator.save_weights(os.path.join(WEIGHTS_DIR, "generator_v2.weights.h5"))
-    ema.restore()
+    with ema.swapped():
+        generator.save_weights(os.path.join(WEIGHTS_DIR, "generator_v2.weights.h5"))
     discriminator.save_weights(os.path.join(WEIGHTS_DIR, "discriminator_v2.weights.h5"))
+    ema.save(state.ema_ckpt())
 
-    gan_log_dir = os.path.join(LOG_DIR, "gan")
-    os.makedirs(gan_log_dir, exist_ok=True)
-    plot_gan_losses(d_losses, g_losses, w_distances, g_accs, save_path=os.path.join(gan_log_dir, "v2_loss_curves.png"))
+    gan_log_dir = os.path.join(LOG_DIR,
+        "gan")
+    os.makedirs(gan_log_dir,
+        exist_ok=True)
+    plot_gan_losses(
+        d_losses, g_losses, w_distances,
+            g_accs,
+        save_path=os.path.join(gan_log_dir, "v2_loss_curves.png"), d_label="W-Distance",
+    )
     if fid_scores:
-        plot_fid_fs_vs_epochs(fid_scores, fs_scores, save_path=os.path.join(gan_log_dir, "v2_fid_fs_curves.png"))
-
-    if original_policy.name != "float32":
-        tf.keras.mixed_precision.set_global_policy(original_policy)
+        plot_fid_fs_vs_epochs(fid_scores, fs_scores, save_path=os.path.join(gan_log_dir,
+            "v2_fid_fs_curves.png"))
 
     return generator, discriminator, loss_logger, fid_scores, fs_scores
 
@@ -1499,15 +1746,19 @@ def main():
     ensure_datasets(download_figshare=True, download_brats=True)
 
     figshare_dir = os.path.join(RAW_DIR, "figshare")
-    brats_dir = os.path.join(RAW_DIR, "brats")
+    brats_dir = os.path.join(RAW_DIR,
+        "brats")
 
-    train_detection(data_dir=figshare_dir, resume=True)
-    train_classifier(data_dir=figshare_dir, resume=True)
+    train_detection(data_dir=figshare_dir,
+        resume=True)
+    train_classifier(data_dir=figshare_dir,
+        resume=True)
     generator, _, _, _, _ = train_gan(data_dir=figshare_dir, gan_type="conditional", resume=True)
     if LOW_VRAM_MODE:
         print("Skipping GAN-augmented classifier stage in low-VRAM mode")
     else:
-        train_classifier_with_gan(generator, data_dir=figshare_dir, gan_type="conditional", resume=True)
+        train_classifier_with_gan(generator, data_dir=figshare_dir, gan_type="conditional",
+            resume=True)
 
     if os.path.exists(brats_dir) and len(os.listdir(brats_dir)) > 0:
         train_segmentation(data_dir=brats_dir, resume=True)
@@ -1524,7 +1775,8 @@ if __name__ == "__main__":
     configure_gpu()
 
     if args.download_figshare or args.download_brats:
-        ensure_datasets(download_figshare=args.download_figshare, download_brats=args.download_brats)
+        ensure_datasets(download_figshare=args.download_figshare,
+            download_brats=args.download_brats)
 
     if args.only_download:
         if args.download_figshare or args.download_brats:
@@ -1545,30 +1797,49 @@ if __name__ == "__main__":
     if args.track == "all":
         main()
     elif args.track == "detection":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
-        ensure_datasets(download_figshare=True, download_brats=False)
-        train_detection(data_dir=ddir, epochs=args.epochs, resume=resume, patient_level=args.patient_level)
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "figshare")
+        ensure_datasets(download_figshare=True,
+            download_brats=False)
+        train_detection(data_dir=ddir,
+            epochs=args.epochs,
+            resume=resume,
+            patient_level=args.patient_level)
     elif args.track == "segmentation":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "brats")
-        ensure_datasets(download_figshare=False, download_brats=True)
-        train_segmentation(data_dir=ddir, epochs=args.epochs, resume=resume, patient_level=args.patient_level)
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "brats")
+        ensure_datasets(download_figshare=False,
+            download_brats=True)
+        train_segmentation(data_dir=ddir, epochs=args.epochs, resume=resume,
+            patient_level=args.patient_level)
     elif args.track == "classifier":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
-        ensure_datasets(download_figshare=True, download_brats=False)
-        train_classifier(data_dir=ddir, epochs=args.epochs, resume=resume, patient_level=args.patient_level)
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "figshare")
+        ensure_datasets(download_figshare=True,
+            download_brats=False)
+        train_classifier(data_dir=ddir, epochs=args.epochs, resume=resume,
+            patient_level=args.patient_level)
     elif args.track == "gan":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
-        ensure_datasets(download_figshare=True, download_brats=False)
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "figshare")
+        ensure_datasets(download_figshare=True,
+            download_brats=False)
         train_gan(data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs, resume=resume)
     elif args.track == "gan_v2":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
-        ensure_datasets(download_figshare=True, download_brats=False)
-        train_gan_v2(data_dir=ddir, epochs=args.epochs, resume=resume)
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "figshare")
+        ensure_datasets(download_figshare=True,
+            download_brats=False)
+        train_gan_v2(data_dir=ddir, epochs=args.epochs,
+            resume=resume)
     elif args.track == "gan_augmented":
-        ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
+        ddir = args.data_dir or os.path.join(RAW_DIR,
+            "figshare")
         ensure_datasets(download_figshare=True, download_brats=False)
         if LOW_VRAM_MODE:
             print("GAN-augmented classifier training is disabled in low-VRAM mode")
             sys.exit(0)
-        generator, _, _, _, _ = train_gan(data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs, resume=resume)
-        train_classifier_with_gan(generator, data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs, resume=resume)
+        generator, _, _, _, _ = train_gan(data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs,
+            resume=resume)
+        train_classifier_with_gan(generator, data_dir=ddir, gan_type=args.gan_type,
+            epochs=args.epochs, resume=resume)

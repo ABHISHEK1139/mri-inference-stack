@@ -8,10 +8,9 @@ import platform
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, asdict
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 STATUS_PASS = "PASS"
 STATUS_WARN = "WARN"
@@ -48,7 +47,8 @@ def _run_command(command: list[str]) -> tuple[bool, str]:
 
 def _check_exists(path: Path, name: str, required: bool) -> CheckResult:
     if path.exists():
-        return CheckResult(name=name, status=STATUS_PASS, details=f"found: {path}", required=required)
+        return CheckResult(name=name, status=STATUS_PASS, details=f"found: {path}",
+            required=required)
     status = STATUS_FAIL if required else STATUS_WARN
     return CheckResult(name=name, status=status, details=f"missing: {path}", required=required)
 
@@ -62,11 +62,15 @@ def _check_not_lfs_pointer(path: Path, name: str, required: bool) -> CheckResult
         with path.open("rb") as f:
             header = f.read(48)
         if header.startswith(b"version https://git-lfs.github.com/spec/v1"):
+            # Honour the caller's `required` flag. Hard-coding required=True made
+            # an optional LFS stub fail the whole preflight, which is exactly
+            # what `--require-weights` is meant to control.
+            status = STATUS_FAIL if required else STATUS_WARN
             return CheckResult(
                 name=name,
-                status=STATUS_FAIL,
+                status=status,
                 details=f"Git LFS pointer (not actual model): {path}. Run `git lfs pull`.",
-                required=True,
+                required=required,
             )
         size = path.stat().st_size
         return CheckResult(
@@ -76,7 +80,9 @@ def _check_not_lfs_pointer(path: Path, name: str, required: bool) -> CheckResult
             required=required,
         )
     except OSError as exc:
-        return CheckResult(name=name, status=STATUS_FAIL, details=f"read error: {exc}", required=True)
+        status = STATUS_FAIL if required else STATUS_WARN
+        return CheckResult(name=name, status=status, details=f"read error: {exc}",
+            required=required)
 
 
 def _check_python_version(min_version: tuple[int, int]) -> CheckResult:
@@ -108,14 +114,24 @@ def _check_detection_config(path: Path, required: bool) -> CheckResult:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-        threshold = float(data.get("threshold", 0.5))
+        # A missing "threshold" key must not silently pass with the 0.5 default:
+        # the app would then use an uncalibrated cutoff, materially changing
+        # precision/recall without any visible error.
+        if "threshold" not in data:
+            return CheckResult(
+                name="detection-threshold-config",
+                status=STATUS_FAIL if required else STATUS_WARN,
+                details=f"missing 'threshold' key in {path}",
+                required=required,
+            )
+        threshold = float(data["threshold"])
         in_range = 0.0 <= threshold <= 1.0
         if not in_range:
             return CheckResult(
                 name="detection-threshold-config",
-                status=STATUS_FAIL,
+                status=STATUS_FAIL if required else STATUS_WARN,
                 details=f"threshold out of range: {threshold}",
-                required=True,
+                required=required,
             )
         return CheckResult(
             name="detection-threshold-config",
@@ -124,15 +140,17 @@ def _check_detection_config(path: Path, required: bool) -> CheckResult:
             required=required,
         )
     except Exception as exc:
+        status = STATUS_FAIL if required else STATUS_WARN
         return CheckResult(
             name="detection-threshold-config",
-            status=STATUS_FAIL,
+            status=status,
             details=f"invalid json: {exc}",
-            required=True,
+            required=required,
         )
 
 
-def _check_command_available(command: str, version_args: Iterable[str], required: bool) -> CheckResult:
+def _check_command_available(command: str, version_args: Iterable[str],
+    required: bool) -> CheckResult:
     command_path = shutil.which(command)
     if command_path is None:
         status = STATUS_FAIL if required else STATUS_WARN
@@ -191,6 +209,10 @@ def _check_command_available_variants(
 
 def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
     root = Path(__file__).resolve().parent.parent
+    # Use getattr so a programmatically-constructed partial Namespace works.
+    require_weights = getattr(args, "require_weights", False)
+    require_datasets = getattr(args, "require_datasets", False)
+    ci_mode = getattr(args, "ci_mode", False)
 
     required_files = [
         root / "app.py",
@@ -209,8 +231,11 @@ def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
         root / "weights" / "classifier_model.keras",
     ]
 
+    # Matches pyproject's requires-python and scripts/preflight.py's own floor.
+    min_python = (3, 10)
+
     checks: list[CheckResult] = []
-    checks.append(_check_python_version((3, 10)))
+    checks.append(_check_python_version(min_python))
 
     for path in required_files:
         checks.append(_check_exists(path, name=f"file-{path.name}", required=True))
@@ -220,23 +245,29 @@ def run_preflight(args: argparse.Namespace) -> list[CheckResult]:
             _check_not_lfs_pointer(
                 path,
                 name=f"artifact-{path.name}",
-                required=args.require_weights,
+                required=require_weights,
             )
         )
 
     checks.append(
         _check_detection_config(
             root / "weights" / "detection_inference_config.json",
-            required=args.require_weights,
+            required=require_weights,
         )
     )
 
-    if args.require_datasets:
+    if require_datasets:
         checks.append(
-            _check_exists(root / "data" / "raw" / "figshare", name="dataset-figshare", required=True)
+            _check_exists(root / "data" / "raw" / "figshare", name="dataset-figshare",
+                required=True)
+        )
+        # BraTS is the segmentation track's only source; checking it here stops
+        # preflight passing for a run that will skip track 2.
+        checks.append(
+            _check_exists(root / "data" / "raw" / "brats", name="dataset-brats", required=False)
         )
 
-    if not args.ci_mode:
+    if not ci_mode:
         checks.append(_check_command_available("git", ["--version"], required=False))
         checks.append(_check_command_available("docker", ["--version"], required=False))
         checks.append(
@@ -277,9 +308,12 @@ def summarize_results(results: list[CheckResult]) -> tuple[bool, str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run project readiness checks")
-    parser.add_argument("--ci-mode", action="store_true", help="Skip external command checks for CI")
-    parser.add_argument("--require-weights", action="store_true", help="Fail if core model files are missing")
-    parser.add_argument("--require-datasets", action="store_true", help="Fail if raw dataset folders are missing")
+    parser.add_argument("--ci-mode", action="store_true",
+        help="Skip external command checks for CI")
+    parser.add_argument("--require-weights", action="store_true",
+        help="Fail if core model files are missing")
+    parser.add_argument("--require-datasets", action="store_true",
+        help="Fail if raw dataset folders are missing")
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     return parser
 

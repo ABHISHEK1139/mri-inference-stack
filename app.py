@@ -11,7 +11,15 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 
-from config import CHECKPOINT_DIR, CLASS_NAMES, PROJECT_NAME, WEIGHTS_DIR
+from config import (
+    CHECKPOINT_DIR,
+    CLASS_NAMES,
+    LATENT_DIM,
+    NUM_CLASSES,
+    PROJECT_NAME,
+    WEIGHTS_DIR,
+    ensure_directories,
+)
 from preprocessing import (
     preprocess_classifier,
     preprocess_detection,
@@ -26,9 +34,23 @@ DETECTION_CONFIG_CANDIDATES = [
     Path(CHECKPOINT_DIR) / "detection" / "inference_config.json",
 ]
 
+SEGMENTATION_CUSTOM_OBJECTS = None  # populated lazily in load_research_models
+
 
 def _load_image(image_file) -> Image.Image:
-    return Image.open(image_file).convert("L")
+    """Decode an upload into a grayscale PIL image.
+
+    The buffer is copied out and closed so Streamlit's upload handle is not
+    held open for the lifetime of the session, and a corrupt upload surfaces as
+    a Streamlit error instead of an unhandled exception.
+    """
+    try:
+        with Image.open(image_file) as image:
+            return image.convert("L")
+    except Exception as exc:
+        logger.exception("Could not decode the uploaded image")
+        st.error(f"Could not read that image: {exc}")
+        st.stop()
 
 
 def _load_detection_config() -> dict:
@@ -87,7 +109,15 @@ def load_core_models() -> dict[str, Any]:
 @st.cache_resource
 def load_research_models() -> dict[str, Any]:
     import tensorflow as tf
+
     from models.segmentation import dice_bce_loss, dice_coefficient, iou_metric
+
+    global SEGMENTATION_CUSTOM_OBJECTS
+    SEGMENTATION_CUSTOM_OBJECTS = {
+        "dice_bce_loss": dice_bce_loss,
+        "dice_coefficient": dice_coefficient,
+        "iou_metric": iou_metric,
+    }
 
     models: dict[str, Any] = {}
     segmentation_path = Path(WEIGHTS_DIR) / "segmentation_model.keras"
@@ -101,11 +131,7 @@ def load_research_models() -> dict[str, Any]:
                 models["segmentation"] = tf.keras.models.load_model(
                     segmentation_path,
                     compile=False,
-                    custom_objects={
-                        "dice_bce_loss": dice_bce_loss,
-                        "dice_coefficient": dice_coefficient,
-                        "iou_metric": iou_metric,
-                    },
+                    custom_objects=SEGMENTATION_CUSTOM_OBJECTS,
                 )
             except Exception as exc:
                 logger.exception("Could not load segmentation model")
@@ -122,6 +148,23 @@ def load_research_models() -> dict[str, Any]:
                 st.warning(f"Could not load generator model: {exc}")
 
     return models
+
+
+def _top_class(predictions: np.ndarray) -> tuple[int, float]:
+    """Return (argmax index, softmax score), validated against CLASS_NAMES.
+
+    A model whose output width disagrees with ``CLASS_NAMES`` used to index past
+    the end of the list (or silently mislabel a class), so the mismatch is
+    surfaced instead.
+    """
+    scores = np.asarray(predictions).ravel()
+    if scores.size != NUM_CLASSES:
+        raise ValueError(
+            f"Model returned {scores.size} class scores but CLASS_NAMES has {NUM_CLASSES} "
+            f"entries. The weights and config are out of sync."
+        )
+    index = int(np.argmax(scores))
+    return index, float(scores[index])
 
 
 def render_sidebar(core_models: dict[str, Any], detection_config: dict) -> None:
@@ -154,7 +197,8 @@ def render_flagship_workflow(core_models: dict[str, Any], detection_config: dict
     )
     st.write(
         "Upload a brain MRI slice to run the calibrated screening model. "
-        "If tumour likelihood is above the saved operating threshold, the tumour type classifier runs next."
+        "If tumour likelihood is above the saved operating threshold, "
+        "the tumour type classifier runs next."
     )
 
     uploaded = st.file_uploader(
@@ -169,7 +213,9 @@ def render_flagship_workflow(core_models: dict[str, Any], detection_config: dict
     st.image(image, caption="Uploaded grayscale MRI", width=320)
 
     if "detection" not in core_models:
-        st.error("Detection weights are not available. Pull the Git LFS files before running the demo.")
+        st.error(
+            "Detection weights are not available. Pull the Git LFS files before running the demo."
+        )
         return
 
     threshold = float(detection_config.get("threshold", 0.5))
@@ -186,16 +232,23 @@ def render_flagship_workflow(core_models: dict[str, Any], detection_config: dict
     st.caption("This is a model prediction, not a clinical diagnosis.")
 
     if not tumour_likely:
-        st.info("Tumour type classification is skipped because the screening model stayed below threshold.")
+        st.info(
+            "Tumour type classification is skipped because the screening model "
+            "stayed below threshold."
+        )
         return
 
     if "classifier" not in core_models:
         st.warning("Classifier weights are not available, so only screening is shown.")
         return
 
-    classifier_input = preprocess_classifier(image)
-    predictions = core_models["classifier"].predict(classifier_input, verbose=0)[0]
-    class_index = int(np.argmax(predictions))
+    predictions = np.asarray(core_models["classifier"].predict(preprocess_classifier(image),
+        verbose=0)[0])
+    try:
+        class_index, _ = _top_class(predictions)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     predicted_label = CLASS_NAMES[class_index]
 
     st.write(f"Predicted tumour type: `{predicted_label.title()}`")
@@ -204,7 +257,10 @@ def render_flagship_workflow(core_models: dict[str, Any], detection_config: dict
 
 def render_classifier_only(core_models: dict[str, Any]) -> None:
     st.subheader("Tumour Type Classifier")
-    st.write("Use the multi-class classifier directly when you already know the slice contains a tumour.")
+    st.write(
+        "Use the multi-class classifier directly when you already know the slice "
+        "contains a tumour."
+    )
 
     uploaded = st.file_uploader(
         "Upload an MRI image for tumour type classification",
@@ -218,11 +274,19 @@ def render_classifier_only(core_models: dict[str, Any]) -> None:
     st.image(image, caption="Uploaded grayscale MRI", width=320)
 
     if "classifier" not in core_models:
-        st.error("Classifier weights are not available. Pull the Git LFS files before running the demo.")
+        st.error(
+            "Classifier weights are not available. Pull the Git LFS files before "
+            "running the demo."
+        )
         return
 
-    predictions = core_models["classifier"].predict(preprocess_classifier(image), verbose=0)[0]
-    class_index = int(np.argmax(predictions))
+    predictions = np.asarray(core_models["classifier"].predict(preprocess_classifier(image),
+        verbose=0)[0])
+    try:
+        class_index, _ = _top_class(predictions)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     st.success(f"Predicted tumour type: {CLASS_NAMES[class_index].title()}")
     st.bar_chart({CLASS_NAMES[idx].title(): float(score) for idx, score in enumerate(predictions)})
 
@@ -230,13 +294,16 @@ def render_classifier_only(core_models: dict[str, Any]) -> None:
 def render_research_extensions() -> None:
     st.subheader("Research Extensions")
     st.warning(
-        "These modules are intentionally marked experimental. They stay in the repo as research tracks, "
-        "not as the default production demo."
+        "These modules are intentionally marked experimental. They stay in the repo "
+        "as research tracks, not as the default production demo."
     )
 
     enable_research = st.checkbox("Load experimental models", value=False)
     if not enable_research:
-        st.info("Experimental models stay unloaded by default to keep the core demo focused and lightweight.")
+        st.info(
+            "Experimental models stay unloaded by default to keep the core demo "
+            "focused and lightweight."
+        )
         return
 
     research_models = load_research_models()
@@ -265,10 +332,13 @@ def render_research_extensions() -> None:
             with col1:
                 st.image(image, caption="Original MRI", use_container_width=True)
             with col2:
-                overlay = np.asarray(image.resize((input_shape[2], input_shape[1])), dtype=np.float32) / 255.0
+                overlay = np.asarray(image.resize((input_shape[2], input_shape[1])),
+                    dtype=np.float32) / 255.0
                 overlay_rgb = np.stack([overlay, overlay, overlay], axis=-1)
-                overlay_rgb[..., 0] = np.maximum(overlay_rgb[..., 0], pred_mask)
-                st.image(overlay_rgb, caption="Predicted mask overlay", use_container_width=True, clamp=True)
+                overlay_rgb[..., 0] = np.maximum(overlay_rgb[..., 0],
+                    pred_mask)
+                st.image(overlay_rgb, caption="Predicted mask overlay", use_container_width=True,
+                    clamp=True)
 
     with subtab_gan:
         st.write("Conditional GAN preview for synthetic MRI slices.")
@@ -280,8 +350,8 @@ def render_research_extensions() -> None:
             target_class = st.selectbox("Condition class", CLASS_NAMES, key="gan_class")
             if st.button("Generate synthetic MRI", key="gan_generate"):
                 class_index = CLASS_NAMES.index(target_class)
-                noise = tf.random.normal([1, 100])
-                label = tf.one_hot([class_index], len(CLASS_NAMES))
+                noise = tf.random.normal([1, LATENT_DIM])
+                label = tf.one_hot([class_index], NUM_CLASSES)
                 generated = research_models["generator"]([noise, label], training=False)[0, :, :, 0]
                 generated = (generated + 1.0) / 2.0
                 st.image(
@@ -294,6 +364,7 @@ def render_research_extensions() -> None:
 
 def main() -> None:
     st.set_page_config(page_title=PROJECT_NAME, layout="wide")
+    ensure_directories()
     detection_config = _load_detection_config()
     core_models = load_core_models()
 

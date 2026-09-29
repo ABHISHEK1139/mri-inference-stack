@@ -1,32 +1,41 @@
 [project]
 name = "mri-inference-stack"
-version = "0.1.0"
+version = "0.2.0"
 description = "End-to-end brain MRI screening, classification, and image synthesis pipeline with containerized infrastructure."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 
 dependencies = [
     "numpy>=1.26,<3.0",
-    "tensorflow>=2.15,<2.22",
+    "tensorflow>=2.16,<2.22",
     "streamlit>=1.35,<2.0",
     "pillow>=10.0",
     "matplotlib>=3.8",
     "scipy>=1.11",
     "scikit-learn>=1.4",
     "seaborn>=0.13",
-    "kaggle>=1.6"
+    "kaggle>=1.6",
 ]
 
 [project.optional-dependencies]
+# Reading the BraTS NIfTI volumes. Kept optional so the flagship
+# detection/classification inference stack installs without a neuro-imaging
+# dependency; `train.py --track segmentation` fails with an actionable message
+# when it is missing.
+segmentation = ["nibabel>=5.2"]
 dev = [
-    "pytest>=7.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0.0"
+    "pytest>=8.0,<9.0",
+    "ruff>=0.6,<1.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Modules import each other by top-level name (`from config import ...`), so the
+# repository root itself is the importable unit.
+packages = ["config.py", "preprocessing.py", "app.py", "data", "models", "training", "evaluation", "scripts"]
 
 [tool.ruff]
 target-version = "py310"
@@ -42,7 +51,21 @@ exclude = [
 select = ["E", "F", "I", "W", "UP", "B"]
 ignore = ["E203"]
 
+[tool.ruff.lint.per-file-ignores]
+# train.py deliberately builds its argument parser and handles `--help` before
+# importing TensorFlow, so the CLI stays usable without the heavy dependency
+# installed. The imports below that early-return block are intentionally
+# deferred and therefore sit after executable statements.
+"train.py" = ["E402"]
+# Model/metric imports must follow pytest.importorskip("tensorflow") so the
+# suite skips cleanly on machines without TensorFlow installed.
+"tests/*" = ["E402"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 python_files = ["test_*.py"]
 testpaths = ["tests"]
+# Tests import top-level modules (config, preprocessing, models, ...) that live
+# at the repository root. Putting the root on sys.path makes a bare `pytest`
+# invocation behave the same as `python -m pytest`.
+pythonpath = ["."]

@@ -10,7 +10,6 @@ from data.dataset import (
     _pair_brats_images_and_masks,
 )
 
-
 # ── _normalize_token ─────────────────────────────────────────────────────
 
 class TestNormalizeToken:

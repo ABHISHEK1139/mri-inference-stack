@@ -77,7 +77,20 @@ Run the automated test suite:
 python -m pytest tests/ -v
 ```
 
+The suite includes regression tests that pin the behaviour of every previously
+fixed defect. TensorFlow-backed tests skip automatically when it is absent.
+
 Automated checks are defined in [`.github/workflows/quality.yml`](.github/workflows/quality.yml).
+
+### Optional extras
+
+The flagship detection/classification stack installs with `requirements.txt`
+alone. Two features are opt-in:
+
+| Extra | Install | Enables |
+| --- | --- | --- |
+| Segmentation volumes | `pip install -e ".[segmentation]"` | Reading BraTS `.nii`/`.nii.gz` volumes. Without it, export BraTS to PNG slices or the segmentation track fails with an actionable message. |
+| Development | `pip install -e ".[dev]"` | `pytest` and `ruff`. |
 
 ## Local Run
 
@@ -181,7 +194,7 @@ Heavy transient artifacts are excluded from version control:
 |-- training/                # Callbacks, state managers, and training utilities
 |-- evaluation/              # Metrics, threshold calibration, and confusion matrices
 |-- scripts/                 # Preflight readiness checker and utilities
-|-- tests/                   # Test suite (dataset, models, metrics, preprocessing)
+|-- tests/                   # Unit + regression tests (dataset, models, metrics, preprocessing, infra)
 |-- docs/                    # Architecture diagrams, system design, and runbooks
 |-- weights/                 # LFS-managed runnable model weights
 |-- outputs/                 # Curated evaluation plots and figures
@@ -201,11 +214,12 @@ Heavy transient artifacts are excluded from version control:
 
 ## Limitations
 
-- **2D Slices Only**: The pipeline accepts 2D grayscale images (PNG/JPG/BMP/TIFF). It does not process volumetric MRI formats (NIfTI `.nii/.nii.gz`, DICOM `.dcm`).
+- **2D Slices Only (app)**: The Streamlit app accepts 2D grayscale images (PNG/JPG/BMP/TIFF). It does not process volumetric MRI formats (NIfTI `.nii/.nii.gz`, DICOM `.dcm`). The *training* pipeline can read BraTS NIfTI volumes when the optional `segmentation` extra is installed.
 - **Not a Diagnostic Tool**: Model predictions are screening-level likelihoods and must not be used as clinical diagnoses.
 - **No Domain-Level Input Filtering**: The system does not verify that an uploaded image is a brain MRI scan; non-medical images will produce unvalidated predictions.
-- **Image-Level Benchmark Baseline**: Legacy benchmark metrics were computed using image-level train/test splits. Future training passes should employ `--patient_level`.
-- **Pretrained Initialization**: The saved classifier checkpoint was originally trained from scratch; recent code updates enable ImageNet transfer learning for future training runs.
+- **Image-Level Benchmark Baseline**: Legacy benchmark metrics were computed using image-level train/test splits. Use `--patient_level` for leakage-free splits; the shipped `weights/detection_inference_config.json` threshold was calibrated on an image-level split.
+- **Classifier Checkpoint Provenance**: `build_classifier` now rescales `[0, 1]` inputs to the `[0, 255]` range that EfficientNetB0's ImageNet stem expects, which is what makes transfer learning effective. The currently shipped `weights/classifier_model.keras` predates this fix, so it remains in legacy unscaled mode — Keras serialises the architecture, so it loads and runs unchanged. Retrain with `python train.py --track classifier` to obtain a checkpoint that actually benefits from the ImageNet initialization.
+- **Model Quality**: Reported metrics come from a small public dataset and are not clinically validated. Do not present them as performance estimates for a real screening deployment.
 - **Hardware Requirements**: Segmentation and GAN tracks are experimental modules and require sufficient GPU VRAM for extended runs.
 
 ## License

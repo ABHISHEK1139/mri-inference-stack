@@ -7,8 +7,6 @@ this module to ensure training↔inference consistency.
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import numpy as np
 from PIL import Image
 
@@ -19,8 +17,8 @@ _IMG_CFG = ImageConfig()
 
 def _to_grayscale_array(
     image: Image.Image,
-    target_size: Tuple[int, int],
-    resample: int = Image.BILINEAR,
+    target_size: tuple[int, int],
+    resample: int = Image.Resampling.BILINEAR,
 ) -> np.ndarray:
     """Convert a PIL image to a grayscale float32 array with channel dim."""
     gray = image.convert("L")
@@ -32,7 +30,7 @@ def _to_grayscale_array(
 
 def preprocess_detection(
     image: Image.Image,
-    target_size: Tuple[int, int] | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Preprocess a single image for the binary tumour detection model.
 
@@ -48,7 +46,7 @@ def preprocess_detection(
 
 def preprocess_classifier(
     image: Image.Image,
-    target_size: Tuple[int, int] | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Preprocess a single image for the multi-class tumour classifier.
 
@@ -64,7 +62,7 @@ def preprocess_classifier(
 
 def preprocess_segmentation(
     image: Image.Image,
-    target_size: Tuple[int, int] | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Preprocess a single image for the segmentation U-Net.
 
@@ -78,7 +76,7 @@ def preprocess_segmentation(
 
 def preprocess_segmentation_mask(
     image: Image.Image,
-    target_size: Tuple[int, int] | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Preprocess a segmentation mask (binary threshold at > 0).
 
@@ -86,7 +84,7 @@ def preprocess_segmentation_mask(
     Output shape: (1, H, W, 1)
     """
     target_size = target_size or _IMG_CFG.segmentation_size
-    array = _to_grayscale_array(image, target_size, resample=Image.NEAREST)
+    array = _to_grayscale_array(image, target_size, resample=Image.Resampling.NEAREST)
     array = (array > 0).astype(np.float32)
     return np.expand_dims(array, axis=(0, -1))
 
@@ -95,7 +93,7 @@ def preprocess_segmentation_mask(
 
 def preprocess_gan(
     image: Image.Image,
-    target_size: Tuple[int, int] | None = None,
+    target_size: tuple[int, int] | None = None,
 ) -> np.ndarray:
     """Preprocess a single image for GAN training/evaluation.
 

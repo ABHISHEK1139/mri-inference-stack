@@ -1,7 +1,6 @@
 """Project configuration for the Brain MRI intelligence system."""
 import os
 from dataclasses import dataclass, field
-from typing import Tuple
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -54,12 +53,12 @@ DATASET_CONFIG = {
 
 @dataclass
 class ImageConfig:
-    detection_size: Tuple[int, int] = (224, 224)
-    segmentation_size: Tuple[int, int] = (128, 128) if LOW_VRAM_MODE else (256, 256)
-    classifier_size: Tuple[int, int] = (224, 224)
-    gan_size: Tuple[int, int] = field(default_factory=lambda: (GAN_IMAGE_SIZE, GAN_IMAGE_SIZE))
+    detection_size: tuple[int, int] = (224, 224)
+    segmentation_size: tuple[int, int] = (128, 128) if LOW_VRAM_MODE else (256, 256)
+    classifier_size: tuple[int, int] = (224, 224)
+    gan_size: tuple[int, int] = field(default_factory=lambda: (GAN_IMAGE_SIZE, GAN_IMAGE_SIZE))
     channels: int = 1
-    normalize_range: Tuple[float, float] = (-1.0, 1.0)
+    normalize_range: tuple[float, float] = (-1.0, 1.0)
 
 
 @dataclass
@@ -76,17 +75,25 @@ class TrainConfig:
 
 if LOW_VRAM_MODE:
     TRACK_CONFIGS = {
-        "detection": TrainConfig(epochs=30, batch_size=_env_int("DETECTION_BATCH_SIZE", 16), learning_rate=1e-3),
-        "segmentation": TrainConfig(epochs=50, batch_size=_env_int("SEG_BATCH_SIZE", 2), learning_rate=1e-4),
-        "classifier": TrainConfig(epochs=40, batch_size=_env_int("CLASSIFIER_BATCH_SIZE", 8), learning_rate=1e-4),
-        "gan": TrainConfig(epochs=100, batch_size=_env_int("GAN_BATCH_SIZE", 8), learning_rate=2e-4),
+        "detection": TrainConfig(epochs=30, batch_size=_env_int("DETECTION_BATCH_SIZE", 16),
+            learning_rate=1e-3),
+        "segmentation": TrainConfig(epochs=50, batch_size=_env_int("SEG_BATCH_SIZE", 2),
+            learning_rate=1e-4),
+        "classifier": TrainConfig(epochs=40, batch_size=_env_int("CLASSIFIER_BATCH_SIZE", 8),
+            learning_rate=1e-4),
+        "gan": TrainConfig(epochs=100, batch_size=_env_int("GAN_BATCH_SIZE", 8),
+            learning_rate=2e-4),
     }
 else:
     TRACK_CONFIGS = {
-        "detection": TrainConfig(epochs=30, batch_size=_env_int("DETECTION_BATCH_SIZE", 32), learning_rate=1e-3),
-        "segmentation": TrainConfig(epochs=50, batch_size=_env_int("SEG_BATCH_SIZE", 8), learning_rate=1e-4),
-        "classifier": TrainConfig(epochs=40, batch_size=_env_int("CLASSIFIER_BATCH_SIZE", 16), learning_rate=1e-4),
-        "gan": TrainConfig(epochs=100, batch_size=_env_int("GAN_BATCH_SIZE", 64), learning_rate=2e-4),
+        "detection": TrainConfig(epochs=30, batch_size=_env_int("DETECTION_BATCH_SIZE", 32),
+            learning_rate=1e-3),
+        "segmentation": TrainConfig(epochs=50, batch_size=_env_int("SEG_BATCH_SIZE", 8),
+            learning_rate=1e-4),
+        "classifier": TrainConfig(epochs=40, batch_size=_env_int("CLASSIFIER_BATCH_SIZE", 16),
+            learning_rate=1e-4),
+        "gan": TrainConfig(epochs=100, batch_size=_env_int("GAN_BATCH_SIZE", 64),
+            learning_rate=2e-4),
     }
 
 
@@ -104,5 +111,24 @@ EXPERIMENTAL_TRACKS = ("segmentation", "gan")
 CLASS_NAMES = ["glioma", "meningioma", "pituitary", "normal"]
 NUM_CLASSES = len(CLASS_NAMES)
 
-for d in [DATA_DIR, RAW_DIR, PROCESSED_DIR, CHECKPOINT_DIR, LOG_DIR, OUTPUT_DIR, WEIGHTS_DIR]:
-    os.makedirs(d, exist_ok=True)
+MANAGED_DIRS = (
+    DATA_DIR,
+    RAW_DIR,
+    PROCESSED_DIR,
+    CHECKPOINT_DIR,
+    LOG_DIR,
+    OUTPUT_DIR,
+    WEIGHTS_DIR,
+)
+
+
+def ensure_directories() -> None:
+    """Create the project's managed output directories.
+
+    Called explicitly by entry points instead of at import time: merely
+    ``import config`` (which every test and every module does) previously created
+    seven directories as a side effect, which fails on read-only filesystems and
+    pollutes the working tree during test collection.
+    """
+    for directory in MANAGED_DIRS:
+        os.makedirs(directory, exist_ok=True)

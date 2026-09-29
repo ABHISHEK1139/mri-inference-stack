@@ -12,28 +12,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The model weights are LFS-tracked. `lfs: true` fetches them so the
+          # preflight artifact checks and the Streamlit import path are exercised
+          # against real files rather than pointer stubs.
+          lfs: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
-      - name: Install tooling
+      - name: Install everything
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt -r requirements.txt
 
       - name: Ruff lint
         run: ruff check .
 
       - name: Python compile smoke check
-        run: python -m compileall app.py train.py config.py data models training evaluation scripts
+        run: python -m compileall app.py train.py config.py preprocessing.py data models training evaluation scripts
 
       - name: Preflight structural check
         run: python scripts/preflight.py --ci-mode
-
-      - name: Install runtime dependencies
-        run: pip install -r requirements.txt
 
       - name: Model construction smoke test
         run: |
@@ -54,6 +56,23 @@ jobs:
           m = build_unet(input_shape=(128, 128, 1))
           assert m.output_shape == (None, 128, 128, 1), f'Segmentation: {m.output_shape}'
           print('Segmentation model: OK')
+          "
+
+      - name: Training data pipeline smoke test
+        run: |
+          # Guards the tf.data graph-tracing regression where augment_image used
+          # a Python `if` on a symbolic tensor, which crashed every
+          # augment=True training run at the first batch.
+          python -c "
+          import numpy as np
+          from data.dataset import build_classifier_dataset
+          ds = build_classifier_dataset(
+              np.zeros((8, 64, 64, 1), np.float32), list(range(8)), batch_size=4
+          )
+          x, y = next(iter(ds))
+          assert tuple(x.shape) == (4, 64, 64, 1), x.shape
+          assert tuple(y.shape) == (4, 4), y.shape
+          print('tf.data pipeline: OK')
           "
 
       - name: Run unit tests
