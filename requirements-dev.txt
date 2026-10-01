@@ -1,4 +1,11 @@
 ruff>=0.6,<1.0
-pytest>=8.0,<9.0
+# Kept in step with the version the suite was validated against.
+pytest>=9.0,<10.0
+# Required by the CI coverage step (pytest --cov) and the local coverage runs.
+pytest-cov>=7.0,<8.0
+# Parses the compose file and Kubernetes manifests in
+# tests/test_infrastructure_manifests.py. Without it those 23 checks silently
+# skip and CI reports green while testing nothing.
+pyyaml>=6.0
 # BraTS NIfTI support, used by the segmentation track and its regression tests.
 nibabel>=5.2

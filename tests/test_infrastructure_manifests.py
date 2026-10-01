@@ -13,12 +13,21 @@ from pathlib import Path
 
 import pytest
 
-yaml = pytest.importorskip("yaml")
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 K8S = REPO_ROOT / "k8s"
+
+# A hard import, not `pytest.importorskip`. A missing PyYAML previously made all
+# 23 manifest checks skip, so CI reported green while validating nothing. This
+# fails collection loudly instead, because pyyaml is a declared dev dependency.
+try:
+    import yaml
+except ImportError as exc:  # pragma: no cover - environment problem
+    raise RuntimeError(
+        "PyYAML is required to validate the Docker and Kubernetes manifests. "
+        "Install it with `pip install -r requirements-dev.txt`."
+    ) from exc
 
 
 @pytest.fixture(scope="module")
