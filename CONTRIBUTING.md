@@ -54,7 +54,24 @@ training/
   data_sources.py     dataset acquisition
   callbacks.py        checkpointing, logging, collapse detection
   tracks/             one module per training track
+
+data/dataset/
+  naming.py           class and split aliases, patient grouping
+  loading.py          decoding, augmentation, tf.data primitives
+  splits.py           discovery, download, leakage-free partitioning
+  loaders.py          in-memory array loaders, BraTS pairing
+  builders.py         the per-track tf.data builders
+
+models/gan/
+  layers.py           conditional batch norm, residual blocks, self-attention
+  v2.py               ResNet generator + projection discriminator
+  training.py         EMA weight tracking, WGAN-GP gradient penalty
+  legacy.py           DCGAN / cGAN / StyleGAN / baseline builders
 ```
+
+`data.dataset` and `models.gan` are packages whose `__init__.py` re-exports
+every public name, so `from data.dataset import build_classifier_dataset` and
+`from models.gan import build_v2_generator` keep working unchanged.
 
 Adding a track means adding `training/tracks/<name>.py`, exporting its trainer
 from that module, and adding a case to the `train.py` dispatcher.

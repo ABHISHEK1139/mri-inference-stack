@@ -230,8 +230,10 @@ Heavy transient artifacts are excluded from version control:
 |-- requirements.lock        # Fully pinned stack used for builds and CI
 |-- ansible/                 # Provisioning and deployment playbooks
 |-- k8s/                     # Kubernetes manifests (deploy, service, netpol, PDB)
-|-- data/                    # Dataset loaders, splits, and augmentation
-|-- models/                  # Detection, Classifier, U-Net, and GAN architectures
+|-- data/                    # Dataset discovery, loading, splitting, pipelines
+|   -- dataset/             #   naming, loading, splits, loaders, builders
+|-- models/                  # Detection, Classifier, U-Net architectures
+|   -- gan/                 #   layers, v2 (WGAN-GP), legacy, training utils
 |-- training/                # Training engine
 |   |-- runtime.py           #   device policy, shared helpers
 |   |-- state.py             #   atomic checkpoint state for resume
