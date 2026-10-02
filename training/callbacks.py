@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import logging
 import os
 from pathlib import Path
@@ -60,12 +61,38 @@ def get_standard_callbacks(
             verbose=1,
         ),
         tf.keras.callbacks.CSVLogger(str(log_dir / "training_log.csv"), append=resume),
+        *_tensorboard_callback(tensorboard_dir),
+    ]
+
+
+def _tensorboard_callback(log_dir: Path) -> list:
+    """Return the TensorBoard callback, or nothing when TensorBoard is absent.
+
+    TensorBoard is an observability tool, not something a training run needs to
+    be correct, so a missing install must not abort the run. Without this guard
+    Keras raises ``TBNotInstalledError`` while constructing the callback, which
+    would fail every ``train.py`` invocation in an environment that installed
+    only the runtime stack.
+
+    The check is explicit rather than a ``try``/``except`` because
+    ``TBNotInstalledError`` derives directly from ``Exception``, not from
+    ``ImportError``, so it would not be caught by the obvious handler. The CSV
+    logger in :func:`get_standard_callbacks` still records the full per-epoch
+    history either way.
+    """
+    if importlib.util.find_spec("tensorboard") is None:
+        logger.warning(
+            "TensorBoard is not installed; skipping the TensorBoard callback. "
+            "Install it with `pip install tensorboard` to keep the event logs."
+        )
+        return []
+    return [
         tf.keras.callbacks.TensorBoard(
-            log_dir=str(tensorboard_dir),
+            log_dir=str(log_dir),
             histogram_freq=0,
             write_graph=False,
             update_freq="epoch",
-        ),
+        )
     ]
 
 

@@ -203,7 +203,60 @@ class TestConfig:
 
 tf = pytest.importorskip("tensorflow")
 
-from training.callbacks import GANLossLogger, ModelCollapseDetector  # noqa: E402
+from training.callbacks import (  # noqa: E402
+    GANLossLogger,
+    ModelCollapseDetector,
+    _tensorboard_callback,
+    get_standard_callbacks,
+)
+
+
+class TestTensorBoardIsOptional:
+    """Regression: every training run crashed when TensorBoard was not installed.
+
+    ``tf.keras.callbacks.TensorBoard`` raises ``TBNotInstalledError`` at
+    construction time, and that error derives straight from ``Exception`` rather
+    than ``ImportError``. Constructing it unconditionally therefore aborted all
+    ten trainer tests in any environment that installed only the runtime stack,
+    while passing on a developer machine that happened to have TensorBoard.
+    """
+
+    def test_returns_callback_when_tensorboard_present(self, tmp_path):
+        if importlib.util.find_spec("tensorboard") is None:
+            pytest.skip("TensorBoard is not installed in this environment")
+        assert len(_tensorboard_callback(tmp_path)) == 1
+
+    def test_returns_nothing_when_tensorboard_missing(self, tmp_path, monkeypatch):
+        real = importlib.util.find_spec
+
+        def without_tensorboard(name, *args, **kwargs):
+            if name == "tensorboard":
+                return None
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(importlib.util, "find_spec", without_tensorboard)
+        assert _tensorboard_callback(tmp_path) == []
+
+    def test_standard_callbacks_survive_without_tensorboard(self, tmp_path, monkeypatch):
+        """The full callback list must still build, minus the TensorBoard entry."""
+        from config import CHECKPOINT_DIR, LOG_DIR
+
+        real = importlib.util.find_spec
+        monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: (
+            None if name == "tensorboard" else real(name, *a, **k)
+        ))
+        monkeypatch.setattr("training.callbacks.CHECKPOINT_DIR", tmp_path / "ckpt")
+        monkeypatch.setattr("training.callbacks.LOG_DIR", tmp_path / "logs")
+
+        callbacks = get_standard_callbacks(
+            tf.keras.Sequential([tf.keras.layers.Input((4,)), tf.keras.layers.Dense(1)]),
+            "tensorboard_optional_probe",
+        )
+        names = [type(c).__name__ for c in callbacks]
+        assert "TensorBoard" not in names
+        assert {"ModelCheckpoint", "EarlyStopping", "CSVLogger"} <= set(names)
+        assert (tmp_path / "logs" / "tensorboard_optional_probe").is_dir()
+        assert CHECKPOINT_DIR is not None and LOG_DIR is not None
 
 
 class TestGanLossLoggerColumns:
