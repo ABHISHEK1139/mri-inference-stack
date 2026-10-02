@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import replace
 
 import numpy as np
 import tensorflow as tf
@@ -20,7 +21,8 @@ from data.dataset import (
     get_figshare_train_val_test_split,
     load_images_from_paths,
 )
-from evaluation.metrics import calculate_fid, calculate_fs, plot_fid_fs_vs_epochs, plot_gan_losses
+from evaluation.frechet import calculate_fid, calculate_fs
+from evaluation.plots import plot_fid_fs_vs_epochs, plot_gan_losses
 from models.gan import (
     build_baseline_discriminator,
     build_baseline_generator,
@@ -43,6 +45,7 @@ from training.runtime import (
     set_seed,
 )
 from training.state import GANState
+from training.tracks.gan_config import GanTrainerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -154,38 +157,28 @@ def _train_gan_impl(data_dir=None, gan_type="conditional", epochs=None, fid_eval
     best_quality_raw = state.state.get("best_quality", float("inf"))
     best_quality = best_quality_raw if np.isfinite(best_quality_raw) else float("inf")
     gan_no_improve = int(state.state.get("gan_no_improve", 0))
-    gan_early_stop_patience = int(os.getenv("GAN_EARLY_STOP_PATIENCE", "3"))
-    gan_target_fid = float(os.getenv("GAN_TARGET_FID", "0") or 0)
-    gan_target_fs = float(os.getenv("GAN_TARGET_FS", "0") or 0)
-    gan_d_steps = max(1, int(os.getenv("GAN_D_STEPS",
-        "1")))
-    gan_g_steps = max(1, int(os.getenv("GAN_G_STEPS",
-        "2")))
-    # Restore the anti-collapse step/LR tuning that was in effect when the run
-    # was interrupted; it is part of the optimiser state, not a fresh default.
-    saved_g_steps = state.state.get("g_steps")
-    if resume and saved_g_steps:
-        gan_g_steps = max(1, int(saved_g_steps))
-    gan_recovery_mode = os.getenv("GAN_RECOVERY_MODE", "0").strip().lower() in {"1", "true", "yes",
-        "on"}
-    gan_diversity_weight = float(os.getenv("GAN_DIVERSITY_WEIGHT",
-        "0.0") or 0.0)
-    gan_class_guidance_weight = float(os.getenv("GAN_CLASS_GUIDANCE_WEIGHT", "0.0") or 0.0)
-    gan_preview_freq = max(1, int(os.getenv("GAN_PREVIEW_FREQ",
-        "5")))
-    gan_shake_on_collapse = os.getenv("GAN_SHAKE_ON_COLLAPSE", "0").strip().lower() in {"1", "true",
-        "yes", "on"}
-    gan_shake_std = float(os.getenv("GAN_SHAKE_STD", "0.0005") or 0.0005)
-    gan_grad_clip_norm = float(os.getenv("GAN_GRAD_CLIP_NORM", "5.0") or 5.0)
-    if gan_recovery_mode:
-        gan_g_steps = max(gan_g_steps, 4)
-        if gan_diversity_weight <= 0.0:
-            gan_diversity_weight = 0.03
-        if gan_class_guidance_weight <= 0.0:
-            gan_class_guidance_weight = 0.35
-        gan_preview_freq = 1
-        if not gan_shake_on_collapse:
-            gan_shake_on_collapse = True
+
+    # Tunables are collected in one place rather than read inline; see
+    # gan_config.GanTrainerConfig for the full documented surface.
+    knobs = GanTrainerConfig.from_env(fid_eval_freq=fid_eval_freq)
+    if resume and state.state.get("g_steps"):
+        # Restore the anti-collapse step/LR tuning that was in effect when the
+        # run was interrupted; it is part of the optimiser state.
+        knobs = replace(knobs, g_steps=max(1, int(state.state["g_steps"])))
+
+    gan_early_stop_patience = knobs.early_stop_patience
+    gan_target_fid = knobs.target_fid
+    gan_target_fs = knobs.target_fs
+    gan_d_steps = knobs.d_steps
+    gan_g_steps = knobs.g_steps
+    gan_recovery_mode = knobs.recovery_mode
+    gan_diversity_weight = knobs.diversity_weight
+    gan_class_guidance_weight = knobs.class_guidance_weight
+    gan_preview_freq = knobs.preview_freq
+    gan_shake_on_collapse = knobs.shake_on_collapse
+    gan_shake_std = knobs.shake_std
+    gan_grad_clip_norm = knobs.grad_clip_norm
+    fid_eval_freq = knobs.fid_eval_freq
 
     bce = tf.keras.losses.BinaryCrossentropy()
 

@@ -9,11 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from evaluation.detection_eval import (
-    binary_metrics_at_threshold,
-    calibrate_binary_threshold,
-)
-from evaluation.metrics import (
+from evaluation import (
     _calculate_statistics,
     _frechet_distance,
     _matrix_sqrtm,
@@ -22,6 +18,10 @@ from evaluation.metrics import (
     plot_fid_fs_vs_epochs,
     plot_gan_losses,
     plot_loss_curves,
+)
+from evaluation.detection_eval import (
+    binary_metrics_at_threshold,
+    calibrate_binary_threshold,
 )
 
 tf = pytest.importorskip("tensorflow")

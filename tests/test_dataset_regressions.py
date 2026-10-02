@@ -347,14 +347,14 @@ class TestPlotDirectoryCreation:
     """
 
     def test_ensure_parent_dir_creates_nested_directories(self, tmp_path):
-        from evaluation.metrics import _ensure_parent_dir
+        from evaluation import _ensure_parent_dir
 
         target = tmp_path / "a" / "b" / "c" / "plot.png"
         _ensure_parent_dir(target)
         assert target.parent.is_dir()
 
     def test_is_idempotent(self, tmp_path):
-        from evaluation.metrics import _ensure_parent_dir
+        from evaluation import _ensure_parent_dir
 
         target = tmp_path / "x" / "plot.png"
         _ensure_parent_dir(target)
@@ -362,12 +362,12 @@ class TestPlotDirectoryCreation:
         assert target.parent.is_dir()
 
     def test_none_path_is_a_noop(self):
-        from evaluation.metrics import _ensure_parent_dir
+        from evaluation import _ensure_parent_dir
 
         _ensure_parent_dir(None)
 
     def test_loss_curves_write_into_a_new_directory(self, tmp_path):
-        from evaluation.metrics import plot_loss_curves
+        from evaluation import plot_loss_curves
 
         class History:
             history = {"loss": [1.0, 0.5], "val_loss": [1.2, 0.7]}

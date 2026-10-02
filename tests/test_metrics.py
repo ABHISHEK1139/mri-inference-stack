@@ -1,6 +1,6 @@
 import numpy as np
 
-from evaluation.metrics import _dice_coef, _iou_coef
+from evaluation import _dice_coef, _iou_coef
 
 
 def test_dice_and_iou_perfect_overlap():

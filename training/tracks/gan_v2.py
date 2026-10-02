@@ -20,7 +20,8 @@ from data.dataset import (
     get_figshare_train_val_test_split,
     load_images_from_paths,
 )
-from evaluation.metrics import calculate_fid, calculate_fs, plot_fid_fs_vs_epochs, plot_gan_losses
+from evaluation.frechet import calculate_fid, calculate_fs
+from evaluation.plots import plot_fid_fs_vs_epochs, plot_gan_losses
 from models.gan import (
     EMAGenerator,
     build_v2_discriminator,

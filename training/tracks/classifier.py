@@ -18,7 +18,8 @@ from data.dataset import (
     get_figshare_train_val_test_split,
     load_images_from_paths,
 )
-from evaluation.metrics import evaluate_classifier, plot_loss_curves
+from evaluation.classification import evaluate_classifier
+from evaluation.plots import plot_loss_curves
 from models.classifier import build_classifier, build_classifier_baseline
 from training.callbacks import (
     get_standard_callbacks,

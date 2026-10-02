@@ -17,7 +17,8 @@ from data.dataset import (
     build_segmentation_dataset_from_paths,
     load_brats_paths,
 )
-from evaluation.metrics import evaluate_segmentation, plot_loss_curves
+from evaluation.plots import plot_loss_curves
+from evaluation.segmentation import evaluate_segmentation
 from models.segmentation import build_unet
 from training.callbacks import (
     get_standard_callbacks,

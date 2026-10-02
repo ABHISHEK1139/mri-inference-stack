@@ -19,7 +19,7 @@ from data.dataset import (
     mix_real_synthetic,
     split_data,
 )
-from evaluation.metrics import evaluate_classifier
+from evaluation.classification import evaluate_classifier
 from models.classifier import build_classifier
 from training.callbacks import (
     get_standard_callbacks,

@@ -20,7 +20,7 @@ from data.dataset import (
     load_images_from_paths,
 )
 from evaluation.detection_eval import calibrate_binary_threshold, evaluate_detection_refined
-from evaluation.metrics import plot_loss_curves
+from evaluation.plots import plot_loss_curves
 from models.detection import build_detection_baseline, build_detection_model
 from training.callbacks import (
     get_standard_callbacks,

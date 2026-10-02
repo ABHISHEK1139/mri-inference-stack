@@ -13,7 +13,7 @@ from sklearn.metrics import (
 )
 
 from config import LOG_DIR
-from evaluation.metrics import plot_confusion_matrix
+from evaluation.plots import plot_confusion_matrix
 
 
 def binary_metrics_at_threshold(y_true, y_pred_proba, threshold=0.5):

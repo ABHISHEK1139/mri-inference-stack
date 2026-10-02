@@ -67,14 +67,25 @@ models/gan/
   v2.py               ResNet generator + projection discriminator
   training.py         EMA weight tracking, WGAN-GP gradient penalty
   legacy.py           DCGAN / cGAN / StyleGAN / baseline builders
+
+evaluation/
+  frechet.py          FID over InceptionV3, relative FS
+  classification.py   classifier and binary-detection reports
+  segmentation.py     segmentation Dice/IoU reports
+  plots.py            confusion matrices and training curves
 ```
 
-`data.dataset` and `models.gan` are packages whose `__init__.py` re-exports
-every public name, so `from data.dataset import build_classifier_dataset` and
-`from models.gan import build_v2_generator` keep working unchanged.
+`data.dataset`, `models.gan` and `evaluation` are packages whose `__init__.py`
+re-exports every public name, so `from data.dataset import
+build_classifier_dataset`, `from models.gan import build_v2_generator` and
+`from evaluation import calculate_fid` keep working unchanged. Inside the
+package, import from the concrete submodule (`from evaluation.plots import
+plot_loss_curves`) rather than the facade.
 
 Adding a track means adding `training/tracks/<name>.py`, exporting its trainer
-from that module, and adding a case to the `train.py` dispatcher.
+from that module, and adding a case to the `train.py` dispatcher. Tunables for a
+trainer belong in a config dataclass beside it, not as inline `os.getenv` calls
+inside the training loop — see `training/tracks/gan_config.py`.
 
 ## Writing tests
 

@@ -242,6 +242,10 @@ Heavy transient artifacts are excluded from version control:
 |   |-- callbacks.py         #   checkpointing, logging, collapse detection
 |   `-- tracks/              #   one module per training track
 |-- evaluation/              # Metrics, threshold calibration, and confusion matrices
+|   |-- frechet.py          #   FID over InceptionV3, relative FS
+|   |-- classification.py   #   classifier and detection reports
+|   |-- segmentation.py     #   segmentation Dice/IoU reports
+|   `-- plots.py            #   confusion matrices and training curves
 |-- scripts/                 # Preflight readiness checker and utilities
 |-- tests/                   # Unit, regression, and per-track integration tests
 |-- docs/                    # Architecture diagrams, system design, and runbooks
