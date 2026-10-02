@@ -9,7 +9,7 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 
 from config import NUM_CLASSES
-from data.dataset.loaders import load_images_from_paths
+from data.dataset.loaders import LabelSequence, PathSequence, load_images_from_paths
 from data.dataset.loading import (
     _finalize_dataset,
     _load_path_image_tf,
@@ -64,7 +64,7 @@ def build_segmentation_dataset_from_paths(
 
 def build_gan_dataset(
     images: np.ndarray,
-    labels: Sequence[int] | None = None,
+    labels: LabelSequence | None = None,
     batch_size: int = 32,
     shuffle: bool = True,
     seed: int | None = None,
@@ -92,8 +92,8 @@ def build_gan_dataset(
 
 
 def build_gan_dataset_from_paths(
-    paths: Sequence[str | os.PathLike[str]],
-    labels: Sequence[int] | None = None,
+    paths: PathSequence,
+    labels: LabelSequence | None = None,
     img_size: tuple[int, int] = (128, 128),
     batch_size: int = 32,
     shuffle: bool = True,
@@ -110,10 +110,10 @@ def build_gan_dataset_from_paths(
         )
         return _finalize_dataset(dataset, batch_size=batch_size)
 
-    labels = np.asarray(labels, dtype=np.int32)
-    dataset = tf.data.Dataset.from_tensor_slices((paths, labels))
+    label_array = np.asarray(labels, dtype=np.int32)
+    dataset = tf.data.Dataset.from_tensor_slices((paths, label_array))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels), seed=seed)
+        dataset = _shuffle(dataset, len(label_array), seed=seed)
     dataset = dataset.map(
         lambda path, label: (
             _load_path_image_tf(path, img_size=img_size, normalize="minus_one_one"),
@@ -134,9 +134,9 @@ def _to_minus_one_one(images: np.ndarray) -> np.ndarray:
 
 def mix_real_synthetic(
     real_images: np.ndarray,
-    real_labels: Sequence[int],
+    real_labels: LabelSequence,
     synthetic_images: np.ndarray,
-    synthetic_labels: Sequence[int],
+    synthetic_labels: LabelSequence,
     ratio: float = 0.5,
     seed: int = 42,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -161,18 +161,22 @@ def mix_real_synthetic(
     rng = np.random.default_rng(seed)
     max_synth = min(len(synthetic_images), int(len(real_images) * ratio))
     if max_synth < len(synthetic_images):
+        # Keep images and labels aligned: both are indexed by the same draw.
         selected = rng.choice(len(synthetic_images), size=max_synth, replace=False)
         synthetic_images = np.asarray(synthetic_images)[selected]
         synthetic_labels = np.asarray(synthetic_labels)[selected]
+
     mixed_images = np.concatenate([real_images, synthetic_images], axis=0)
-    mixed_labels = np.concatenate([np.asarray(real_labels), np.asarray(synthetic_labels)], axis=0)
+    mixed_labels = np.concatenate(
+        [np.asarray(real_labels), np.asarray(synthetic_labels)], axis=0
+    )
     order = rng.permutation(len(mixed_images))
     return mixed_images[order], mixed_labels[order]
 
 
 def build_detection_dataset(
     images: np.ndarray,
-    labels: Sequence[int],
+    labels: LabelSequence,
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
@@ -189,18 +193,18 @@ def build_detection_dataset(
 
 
 def build_detection_dataset_from_paths(
-    paths: Sequence[str | os.PathLike[str]],
-    labels: Sequence[int],
+    paths: PathSequence,
+    labels: LabelSequence,
     img_size: tuple[int, int],
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
     seed: int | None = None,
 ) -> tf.data.Dataset:
-    labels = np.asarray(labels, dtype=np.float32)
-    dataset = tf.data.Dataset.from_tensor_slices((list(paths), labels))
+    label_array = np.asarray(labels, dtype=np.float32)
+    dataset = tf.data.Dataset.from_tensor_slices((list(paths), label_array))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels), seed=seed)
+        dataset = _shuffle(dataset, len(label_array), seed=seed)
     dataset = dataset.map(
         lambda path, label: (_load_path_image_tf(path, img_size=img_size), label),
         num_parallel_calls=tf.data.AUTOTUNE,
@@ -213,7 +217,7 @@ def build_detection_dataset_from_paths(
 
 def build_classifier_dataset(
     images: np.ndarray,
-    labels: Sequence[int],
+    labels: LabelSequence,
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
@@ -231,18 +235,18 @@ def build_classifier_dataset(
 
 
 def build_classifier_dataset_from_paths(
-    paths: Sequence[str | os.PathLike[str]],
-    labels: Sequence[int],
+    paths: PathSequence,
+    labels: LabelSequence,
     img_size: tuple[int, int],
     batch_size: int,
     shuffle: bool = True,
     augment: bool = True,
     seed: int | None = None,
 ) -> tf.data.Dataset:
-    labels = np.asarray(labels, dtype=np.int32)
-    dataset = tf.data.Dataset.from_tensor_slices((list(paths), labels))
+    label_array = np.asarray(labels, dtype=np.int32)
+    dataset = tf.data.Dataset.from_tensor_slices((list(paths), label_array))
     if shuffle:
-        dataset = _shuffle(dataset, len(labels), seed=seed)
+        dataset = _shuffle(dataset, len(label_array), seed=seed)
     dataset = dataset.map(
         lambda path, label: (
             _load_path_image_tf(path,

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-from config import CLASS_NAMES, DATASET_CONFIG, RAW_DIR
+from config import CLASS_NAMES, DATASET_CONFIG, RAW_DIR, dataset_url
 from data.dataset.loading import _iter_image_files
 from data.dataset.naming import (
     CLASS_TO_INDEX,
@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 
 def _prepare_index(root: Path) -> dict[str, dict[str,
     list[str]]]:
-    index = {split: {name: [] for name in CLASS_NAMES} for split in ("train", "val", "test",
-        "unsplit")}
+    index: dict[str, dict[str, list[str]]] = {
+        split: {name: [] for name in CLASS_NAMES}
+        for split in ("train", "val", "test", "unsplit")
+    }
 
     for path in _iter_image_files(root):
         relative_parts = path.relative_to(root).parts
@@ -101,14 +103,14 @@ def download_dataset(name: str) -> Path:
     if name not in DATASET_CONFIG:
         raise ValueError(f"Unsupported dataset name: {name}")
 
-    config = DATASET_CONFIG[name]
+    url = dataset_url(name)
     target_dir = Path(RAW_DIR) / name
     target_dir.mkdir(parents=True, exist_ok=True)
 
     if name == "figshare":
         archive_path = target_dir / "download.zip"
         print(f"Downloading Figshare archive to {archive_path}...")
-        urllib.request.urlretrieve(config["url"], archive_path)
+        urllib.request.urlretrieve(url, archive_path)
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
                 archive.extractall(target_dir)
@@ -116,7 +118,7 @@ def download_dataset(name: str) -> Path:
             archive_path.unlink(missing_ok=True)
         return target_dir
 
-    kaggle_url = config["url"]
+    kaggle_url = url
     dataset_slug = kaggle_url.split("/datasets/")[-1].strip("/")
     if not dataset_slug or dataset_slug == kaggle_url:
         raise RuntimeError(f"Could not derive Kaggle dataset slug from {kaggle_url}")

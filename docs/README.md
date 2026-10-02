@@ -2,6 +2,7 @@
 
 ## Core
 
+- [code_reading_guide.md](code_reading_guide.md)
 - [architecture_diagrams.md](architecture_diagrams.md)
 - [dataset.md](dataset.md)
 - [innovation.md](innovation.md)
@@ -13,6 +14,8 @@
 - [reproducibility_runbook.md](reproducibility_runbook.md)
 
 ## Suggested Reading Order
+
+Start with `code_reading_guide.md` if you are learning the codebase, then:
 
 1. `system-design.md`
 2. `architecture_diagrams.md`

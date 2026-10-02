@@ -74,7 +74,7 @@ def _has_mask_suffix(stem: str) -> bool:
     return len(tokens) > 1 and tokens[-1] in MASK_SUFFIX_TOKENS
 
 
-def _extract_patient_id(path: str) -> str:
+def _extract_patient_id(path: str | os.PathLike[str]) -> str:
     """Extract a patient identifier from a file path.
 
     Groups slices/volumes belonging to the same subject so that patient-level

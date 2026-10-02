@@ -16,12 +16,19 @@ python -m pip install -r requirements.txt
 
 # Optional extras
 python -m pip install -e ".[segmentation]"   # BraTS NIfTI volumes
-python -m pip install -e ".[dev]"            # pytest + ruff
+python -m pip install -e ".[dev]"            # pytest, ruff, mypy
 ```
 
-> `requirements.lock` is generated from the validated environment, not resolved
-> on every build. Regenerate it deliberately with `pip-compile` and re-run the
-> test suite before committing the result.
+> `requirements.lock` is resolved by `pip-compile` from `requirements.txt`, so it
+> pins every transitive dependency. Regenerate it deliberately after changing a
+> dependency, then re-run the test suite before committing:
+>
+> ```bash
+> python -m pip install pip-tools
+> python -m piptools compile --no-header --output-file=requirements.lock requirements.txt
+> python -m pip install -r requirements.lock
+> python -m pytest tests/ -m "not slow" && python -m pytest tests/ -m slow
+> ```
 
 ## 2. Determinism and Seeds
 
@@ -85,18 +92,21 @@ rather than Git LFS pointer stubs, and that
 ```powershell
 python -m pip install -r requirements-dev.txt
 ruff check .
+mypy
 python -m compileall app.py train.py config.py preprocessing.py data models training evaluation scripts tests
 python -m pytest tests/ -m "not slow"        # unit + regression
-python -m pytest tests/ --cov=. --cov-report=term-missing
+python -m pytest tests/ -m slow               # per-track integration
 ```
+
+`mypy` runs with `check_untyped_defs` and the full default error set; only
+`misc`, `override`, and `no-untyped-call` are disabled, because they fire inside
+TensorFlow's dynamic model construction where the types are genuinely opaque.
 
 Trainer integration tests run a real single-epoch training run per track against
-a generated fixture. They are marked `slow` and split out so the fast feedback
-loop stays quick:
-
-```powershell
-python -m pytest tests/ -m slow
-```
+a generated fixture. Each costs 40-180 seconds, so every test in
+`tests/test_trainers_integration.py` and `tests/test_data_sources.py` carries
+`pytestmark = pytest.mark.slow`. That keeps the fast feedback loop at about a
+minute instead of ten.
 
 ## 5. Application Runtime
 
@@ -139,6 +149,18 @@ kubectl apply -f k8s/deployment.yaml
 kubectl apply -f k8s/service.yaml
 kubectl apply -f k8s/pdb.yaml
 ```
+
+To check the manifests without a cluster, validate them against the upstream
+Kubernetes JSON schemas:
+
+```bash
+docker run --rm -v "$PWD/k8s:/manifests:ro" ghcr.io/yannh/kubeconform:v0.6.7 \
+  -strict -summary -kubernetes-version 1.31.0 /manifests
+```
+
+`kubectl apply --dry-run=client` is not a substitute: it still contacts the API
+server to discover resource types, so it fails on a machine with no cluster
+even though nothing is being deployed. This is the same check CI runs.
 
 The image tag in `k8s/deployment.yaml` is versioned rather than `:latest`, so a
 rollout is an explicit, reversible act. The container runs as UID 10001 with a
@@ -198,6 +220,8 @@ integration tests in `tests/test_trainers_integration.py` possible.
 `.github/workflows/quality.yml` runs on every push and pull request:
 
 - Ruff lint
+- Mypy type check
+- Kubernetes manifest validation (kubeconform against the 1.31 schemas)
 - Python compile check
 - Preflight structural verification (`--ci-mode`)
 - Model construction smoke tests (detection, classifier, U-Net, GAN v2)
@@ -207,3 +231,5 @@ integration tests in `tests/test_trainers_integration.py` possible.
 - Coverage report uploaded as an artifact
 
 The workflow installs from `requirements.lock`, so CI runs the pinned stack.
+Coverage is started by the fast tier and appended to by the slow tier, so the
+reported figure covers the whole suite without any test running twice.

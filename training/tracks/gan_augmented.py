@@ -89,8 +89,8 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
     n_synth = int(len(X_train) * ratio)
     if gan_type == "conditional":
         per_class = max(1, n_synth // NUM_CLASSES)
-        syn_imgs = []
-        syn_lbls = []
+        per_class_images = []
+        per_class_labels = []
         for c in range(NUM_CLASSES):
             zc = tf.random.normal([per_class, LATENT_DIM])
             lc = tf.one_hot(tf.constant([c] * per_class), NUM_CLASSES)
@@ -98,10 +98,10 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
             gc = np.clip((gc + 1.0) / 2.0, 0.0,
                 1.0)
             gc = tf.image.resize(gc, IMG_CFG.classifier_size).numpy()
-            syn_imgs.append(gc)
-            syn_lbls.extend([c] * per_class)
-        syn_imgs = np.concatenate(syn_imgs, axis=0)
-        syn_lbls = np.array(syn_lbls, dtype=np.int32)
+            per_class_images.append(gc)
+            per_class_labels.extend([c] * per_class)
+        syn_imgs = np.concatenate(per_class_images, axis=0)
+        syn_lbls = np.array(per_class_labels, dtype=np.int32)
     else:
         z = tf.random.normal([n_synth,
             LATENT_DIM])
@@ -110,7 +110,9 @@ def train_classifier_with_gan(generator, data_dir=None, gan_type="conditional", 
         syn_imgs = np.clip((gi + 1.0) / 2.0, 0.0,
             1.0)
         syn_imgs = tf.image.resize(syn_imgs, IMG_CFG.classifier_size).numpy()
-        syn_lbls = np.random.randint(0, NUM_CLASSES, size=len(syn_imgs))
+        syn_lbls = np.random.randint(
+            0, NUM_CLASSES, size=len(syn_imgs)
+        ).astype(np.int32)
 
     mixed_X, mixed_y = mix_real_synthetic(X_train, y_train, syn_imgs, syn_lbls, ratio=ratio)
 

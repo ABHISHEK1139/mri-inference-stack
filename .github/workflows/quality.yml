@@ -12,7 +12,9 @@ concurrency:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The slow tier trains every model for one epoch and takes ~10 min locally;
+    # hosted runners are slower, so allow headroom rather than risk a flake.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -37,6 +39,22 @@ jobs:
 
       - name: Ruff lint
         run: ruff check .
+
+      - name: Mypy type check
+        run: mypy
+
+      - name: Kubernetes manifest validation
+        run: |
+          # Validates every manifest against the upstream Kubernetes JSON
+          # schemas. `kubectl --dry-run` is not used here: it still contacts the
+          # API server for resource discovery, so it cannot run without a
+          # cluster. kubeconform is schema-only and needs nothing but Docker,
+          # which the runner already provides.
+          docker run --rm \
+            -v "${{ github.workspace }}/k8s:/manifests:ro" \
+            ghcr.io/yannh/kubeconform:v0.6.7 \
+            -strict -summary -kubernetes-version 1.31.0 \
+            /manifests
 
       - name: Compile check
         run: |
@@ -92,21 +110,29 @@ jobs:
           "
 
       - name: Unit and regression tests
-        run: python -m pytest tests/ -v --tb=short -m "not slow"
+        run: |
+          # Coverage is started here and appended to by the slow tier below, so
+          # the report reflects the whole suite without running any test twice.
+          python -m pytest tests/ -v --tb=short -m "not slow" \
+            --cov=. --cov-report=term:skip-covered
 
       - name: Trainer integration tests
-        run: python -m pytest tests/test_trainers_integration.py tests/test_data_sources.py -v --tb=short -m "slow"
-
-      - name: Coverage report
         run: |
-          python -m pytest tests/ -q \
-            --cov=. --cov-report=term:skip-covered --cov-report=xml \
-            -m "not slow"
+          python -m pytest tests/ -v --tb=short -m slow \
+            --cov=. --cov-append --cov-report=
+
+      - name: Coverage summary
+        run: |
+          # The XML is written last so it includes the slow tier's data.
+          python -m coverage report --skip-covered
+          python -m coverage xml
 
       - name: Upload coverage artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
-          path: coverage.xml
+          path: |
+            coverage.xml
+            .coverage
           if-no-files-found: ignore

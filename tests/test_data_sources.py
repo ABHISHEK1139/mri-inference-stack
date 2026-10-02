@@ -11,6 +11,10 @@ from PIL import Image
 
 tf = pytest.importorskip("tensorflow")
 
+# The GAN-augmented track generates synthetic images and trains a classifier on
+# them, so these tests belong to the slow tier alongside the trainer suites.
+pytestmark = pytest.mark.slow
+
 CLASSES = ("glioma", "meningioma", "pituitary", "normal")
 IMG = 32
 

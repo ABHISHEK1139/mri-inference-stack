@@ -255,6 +255,7 @@ Heavy transient artifacts are excluded from version control:
 
 ## Documentation
 
+- [Code Reading Guide](docs/code_reading_guide.md) — start here if you are new to the codebase
 - [System Design Document](docs/system-design.md)
 - [Architecture Diagrams](docs/architecture_diagrams.md)
 - [Dataset Specifications](docs/dataset.md)

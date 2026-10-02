@@ -36,7 +36,10 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
 WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
 
 # Dataset sources
-DATASET_CONFIG = {
+# Source datasets, keyed by name. The inner shape varies (BraTS carries a
+# "task" key, figshare does not), so it is typed as a mapping rather than a
+# fixed dataclass: every consumer reads the keys it needs.
+DATASET_CONFIG: dict[str, dict[str, object]] = {
     "figshare": {
         "url": "https://figshare.com/ndownloader/files/41354957",
         "description": "Figshare Brain Tumour MRI (glioma, meningioma, pituitary, normal)",
@@ -49,6 +52,26 @@ DATASET_CONFIG = {
         "classes": ["tumour"],  # BraTS is a glioma segmentation dataset, not 4-class
     },
 }
+
+
+def dataset_url(name: str) -> str:
+    """Return the download URL for a configured dataset.
+
+    Typed accessor so callers do not have to narrow the heterogeneous
+    ``DATASET_CONFIG`` mapping themselves.
+
+    Raises:
+        KeyError: The dataset is not configured.
+        TypeError: The configured entry has no usable ``url``.
+    """
+    if name not in DATASET_CONFIG:
+        raise KeyError(
+            f"Unknown dataset {name!r}. Configured: {sorted(DATASET_CONFIG)}"
+        )
+    url = DATASET_CONFIG[name].get("url")
+    if not isinstance(url, str) or not url:
+        raise TypeError(f"Dataset {name!r} has no usable 'url' entry.")
+    return url
 
 
 @dataclass

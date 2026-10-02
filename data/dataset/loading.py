@@ -50,7 +50,13 @@ def _load_volume_array(path: str | os.PathLike[str]) -> np.ndarray:
             "Install it with `pip install nibabel` or `pip install .[segmentation]`."
         ) from exc
 
-    volume = np.asanyarray(nib.load(str(path)).dataobj, dtype=np.float32)
+    # nibabel types `load` as a union of image classes, so the concrete
+    # accessors are invisible to a type checker even though every one of them
+    # implements `get_fdata`.
+    volume_data = nib.load(str(path)).get_fdata(  # type: ignore[attr-defined]
+        dtype=np.float32
+    )
+    volume = np.asanyarray(volume_data, dtype=np.float32)
     volume = np.squeeze(volume)
     if volume.ndim > 2:
         # Average-project the leading (slice) axes down to a single 2D frame.

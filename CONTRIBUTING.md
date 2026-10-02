@@ -17,8 +17,10 @@ python -m pip install -r requirements.lock
 python -m pip install -r requirements-dev.txt
 ```
 
-`requirements.lock` pins the stack the tests were validated against. Use
-`requirements.txt` only when you deliberately want floating ranges.
+`requirements.lock` pins the stack the tests were validated against. It is
+resolved from `requirements.txt` with `pip-compile`, so it pins every
+transitive dependency. Use `requirements.txt` only when you deliberately want
+floating ranges.
 
 ## Before opening a pull request
 
@@ -26,18 +28,33 @@ python -m pip install -r requirements-dev.txt
 # 1. Structural readiness
 python scripts/preflight.py
 
-# 2. Lint and compile
+# 2. Lint, types, and compile
 ruff check .
+mypy
 python -m compileall app.py train.py config.py preprocessing.py data models training evaluation scripts tests -q
 
-# 3. Fast test suite (unit + regression)
+# 3. Fast test suite (unit + regression, ~1 minute)
 python -m pytest tests/ -m "not slow" -q
 
-# 4. Trainer integration tests (real single-epoch runs)
+# 4. Trainer integration tests (real single-epoch runs, ~10 minutes)
 python -m pytest tests/ -m slow -q
 
-# 5. Coverage
+# 5. Coverage across the whole suite
 python -m pytest tests/ -m "not slow" --cov=. --cov-report=term-missing
+python -m pytest tests/ -m slow --cov=. --cov-append --cov-report=
+python -m coverage report --skip-covered
+```
+
+`mypy` is configured in `pyproject.toml`. If you add a public function, give it
+a parameter annotation and a return annotation; `check_untyped_defs` means the
+body is type-checked either way, but an annotated signature is what other
+modules are checked against.
+
+If you change anything under `k8s/`, validate the manifests without a cluster:
+
+```powershell
+docker run --rm -v "${PWD}/k8s:/manifests:ro" ghcr.io/yannh/kubeconform:v0.6.7 `
+  -strict -summary -kubernetes-version 1.31.0 /manifests
 ```
 
 All five must pass. CI runs the same commands.
@@ -104,8 +121,10 @@ inside the training loop — see `training/tracks/gan_config.py`.
 - Every run is seeded. Pass `--seed` or set `SEED`.
 - The seed and library versions are recorded in checkpoint state; include them
   in bug reports.
-- If you change a dependency, regenerate `requirements.lock` deliberately and
-  re-run the suite before committing.
+- If you change a dependency, regenerate `requirements.lock` with
+  `pip-compile` and re-run both test tiers before committing. A dependency bump
+  can turn a deprecation warning into a hard error, so the suite is the only
+  proof that the new stack still works.
 
 ## Artifacts
 

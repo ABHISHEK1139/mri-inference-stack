@@ -20,12 +20,12 @@ def evaluate_segmentation(model, X_test=None, y_test=None, test_ds=None, save_di
     os.makedirs(save_dir, exist_ok=True)
 
     # Collect predictions — streaming or in-memory
-    dice_scores = []
-    iou_scores = []
-    vis_inputs = []
-    vis_truths = []
-    vis_preds = []
-    vis_dices = []
+    dice_scores: list[float] = []
+    iou_scores: list[float] = []
+    vis_inputs: list[np.ndarray] = []
+    vis_truths: list[np.ndarray] = []
+    vis_preds: list[np.ndarray] = []
+    vis_dices: list[float] = []
     n_vis_target = 8
 
     if test_ds is not None:

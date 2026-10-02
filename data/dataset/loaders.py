@@ -12,6 +12,17 @@ from data.dataset.naming import _as_path, _extract_patient_id, _has_mask_suffix
 
 logger = logging.getLogger(__name__)
 
+# A single filesystem path, in any of the forms callers use.
+PathLike = str | os.PathLike[str]
+# A collection of paths. NumPy arrays are included because the dataset loaders
+# return `np.asarray(...)` results that are then fed straight back into these
+# builders; NumPy's stubs do not declare `ndarray` as a `Sequence`, so
+# spelling the union out keeps callers honest instead of needing 25 ignores.
+PathSequence = Sequence[PathLike] | np.ndarray
+# Label columns likewise: tracks hold them in NumPy arrays from the dataset
+# loaders, but a plain list of ints is just as valid.
+LabelSequence = Sequence[int] | np.ndarray
+
 
 def _pair_brats_images_and_masks(root: Path) -> tuple[list[str], list[str]]:
     """Pair BraTS image volumes with their segmentation masks.
@@ -79,7 +90,7 @@ def load_brats_dataset(
 
 
 def load_images_from_paths(
-    paths: Sequence[str | os.PathLike[str]],
+    paths: PathSequence,
     img_size: tuple[int, int],
     normalize: str = "zero_one",
     is_mask: bool = False,

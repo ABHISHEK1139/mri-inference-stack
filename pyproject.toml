@@ -24,8 +24,12 @@ dependencies = [
 # when it is missing.
 segmentation = ["nibabel>=5.2"]
 dev = [
-    "pytest>=8.0,<9.0",
     "ruff>=0.6,<1.0",
+    "pytest>=9.0,<10.0",
+    "pytest-cov>=7.0,<8.0",
+    "pyyaml>=6.0",
+    "nibabel>=5.2",
+    "mypy>=1.10",
 ]
 
 [build-system]
@@ -37,15 +41,47 @@ build-backend = "hatchling.build"
 # repository root itself is the importable unit.
 packages = ["config.py", "preprocessing.py", "app.py", "data", "models", "training", "evaluation", "scripts"]
 
+# ── Type checking ────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.10"
+files = ["app.py", "train.py", "config.py", "preprocessing.py", "data", "models",
+         "training", "evaluation", "scripts"]
+
+# TensorFlow and Keras ship partial stubs, and the decorator stack makes fully
+# annotated checking noisy without catching more defects.
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+
+# These catch the defects worth catching: wrong argument types, impossible
+# attribute access, and assignments that change a variable's type mid-function.
+# `disallow_untyped_defs` is deliberately NOT enabled: it would demand
+# annotations on all 135 untyped functions, which is a large mechanical change
+# better made module by module than all at once.
+check_untyped_defs = true
+no_implicit_optional = true
+strict_equality = true
+
+# The full set of checks is on except for these. Each one fires only inside
+# TensorFlow's dynamic Keras model construction and `tf.function` traced
+# signatures, where the types are opaque by nature -- the value of a traced
+# tensor is a Python object until it is executed.
+#   misc            - decorators that erase signatures (e.g. tf.function)
+#   override        - Keras base-class hooks whose stubs are untyped
+#   no-untyped-call - calling into TF APIs that ship no annotations
+disable_error_code = [
+    "misc",
+    "override",
+    "no-untyped-call",
+]
+
+# ── Lint ─────────────────────────────────────────────────────────────────
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-exclude = [
-  "data/raw",
-  "data/processed",
-  "checkpoints",
-  "logs",
-]
+exclude = ["data/raw", "data/processed", "checkpoints", "logs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
@@ -57,10 +93,11 @@ ignore = ["E203"]
 # installed. The imports below that early-return block are intentionally
 # deferred and therefore sit after executable statements.
 "train.py" = ["E402"]
-# Model/metric imports must follow pytest.importorskip("tensorflow") so the
+# Model/metric imports must follow `pytest.importorskip("tensorflow")` so the
 # suite skips cleanly on machines without TensorFlow installed.
 "tests/*" = ["E402"]
 
+# ── Tests ────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
 addopts = "-q"
 python_files = ["test_*.py"]

@@ -213,7 +213,9 @@ class TestProjectionDiscriminator:
         image = tf.random.normal((1, 32, 32, 1))
         score_0 = disc([image, tf.one_hot([0], 4)], training=False)
         score_1 = disc([image, tf.one_hot([1], 4)], training=False)
-        assert not float(score_0) == pytest.approx(float(score_1))
+        # ``.item()`` rather than ``float(...)``: the score is shape (1, 1), and
+        # NumPy 2.5 rejects float() on any array with ndim > 0.
+        assert score_0.numpy().item() != pytest.approx(score_1.numpy().item())
 
 
 class TestV2Generator:

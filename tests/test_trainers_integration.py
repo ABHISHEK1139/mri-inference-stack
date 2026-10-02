@@ -5,8 +5,10 @@ shapes, and a shape test would not have caught the ``EagerTensor.decode``
 crash, the ``tf.data`` graph-tracing failure in ``augment_image``, or the
 missing output directory that aborted a finished run.
 
-Each track runs a single epoch over a tiny generated dataset, so the whole file
-stays fast enough for the default CI job.
+Each track runs a single epoch over a tiny generated dataset. Even so, a full
+trainer run costs 40-180s, so every test in this module is marked ``slow`` and
+CI runs them in a dedicated job. The fast tier covers shapes, loading, and
+regressions; this module covers behaviour.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ import pytest
 from PIL import Image
 
 tf = pytest.importorskip("tensorflow")
+
+pytestmark = pytest.mark.slow
 
 CLASSES = ("glioma", "meningioma", "pituitary", "normal")
 IMG = 32
