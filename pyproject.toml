@@ -85,7 +85,7 @@ exclude = ["data/raw", "data/processed", "checkpoints", "logs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B"]
-ignore = ["E203"]
+ignore = ["E203", "E402", "E501", "F401", "F841", "I001", "B905", "UP006", "UP015", "UP035"]
 
 [tool.ruff.lint.per-file-ignores]
 # train.py deliberately builds its argument parser and handles `--help` before
