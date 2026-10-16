@@ -76,27 +76,48 @@ from training.tracks.segmentation import train_segmentation  # noqa: E402
 logger = logging.getLogger("train")
 
 
-def run_all() -> None:
-    """Run every track in dependency order."""
+def run_all(
+    seed: int | None = None,
+    epochs: int | None = None,
+    resume: bool = True,
+    patient_level: bool = False,
+) -> None:
+    """Run every track in dependency order.
+
+    Takes the parsed CLI arguments explicitly: ``--seed``, ``--epochs``,
+    ``--no_resume`` and ``--patient_level`` were previously dropped on this
+    path, so the logged run seed never matched the seed the tracks used.
+    """
     ensure_datasets(download_figshare=True, download_brats=True)
 
     figshare_dir = os.path.join(RAW_DIR, "figshare")
     brats_dir = os.path.join(RAW_DIR, "brats")
 
-    train_detection(data_dir=figshare_dir, resume=True)
-    train_classifier(data_dir=figshare_dir, resume=True)
+    train_detection(
+        data_dir=figshare_dir, epochs=epochs, resume=resume, seed=seed,
+        patient_level=patient_level,
+    )
+    train_classifier(
+        data_dir=figshare_dir, epochs=epochs, resume=resume, seed=seed,
+        patient_level=patient_level,
+    )
     generator, _, _, _, _ = train_gan(
-        data_dir=figshare_dir, gan_type="conditional", resume=True
+        data_dir=figshare_dir, gan_type="conditional", epochs=epochs,
+        resume=resume, seed=seed,
     )
     if LOW_VRAM_MODE:
         logger.info("Skipping GAN-augmented classifier stage in low-VRAM mode")
     else:
         train_classifier_with_gan(
-            generator, data_dir=figshare_dir, gan_type="conditional", resume=True
+            generator, data_dir=figshare_dir, gan_type="conditional", epochs=epochs,
+            resume=resume, seed=seed,
         )
 
     if os.path.exists(brats_dir) and len(os.listdir(brats_dir)) > 0:
-        train_segmentation(data_dir=brats_dir, resume=True)
+        train_segmentation(
+            data_dir=brats_dir, epochs=epochs, resume=resume, seed=seed,
+            patient_level=patient_level,
+        )
     else:
         logger.info("BraTS not available, skipping segmentation track")
 
@@ -136,20 +157,23 @@ def main() -> None:
     track = args.track
 
     if track == "all":
-        run_all()
+        run_all(
+            seed=seed, epochs=args.epochs, resume=resume,
+            patient_level=args.patient_level,
+        )
         return
 
     if track == "segmentation":
         ddir = args.data_dir or os.path.join(RAW_DIR, "brats")
         ensure_datasets(download_figshare=False, download_brats=True)
         train_segmentation(
-            data_dir=ddir, epochs=args.epochs, resume=resume,
+            data_dir=ddir, epochs=args.epochs, resume=resume, seed=seed,
             patient_level=args.patient_level,
         )
     elif track == "gan_v2":
         ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
         ensure_datasets(download_figshare=True, download_brats=False)
-        train_gan_v2(data_dir=ddir, epochs=args.epochs, resume=resume)
+        train_gan_v2(data_dir=ddir, epochs=args.epochs, resume=resume, seed=seed)
     elif track == "gan_augmented":
         ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
         ensure_datasets(download_figshare=True, download_brats=False)
@@ -157,29 +181,30 @@ def main() -> None:
             logger.info("GAN-augmented classifier training is disabled in low-VRAM mode")
             return
         generator, _, _, _, _ = train_gan(
-            data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs, resume=resume
+            data_dir=ddir, gan_type=args.gan_type, epochs=args.epochs, resume=resume,
+            seed=seed,
         )
         train_classifier_with_gan(
             generator, data_dir=ddir, gan_type=args.gan_type,
-            epochs=args.epochs, resume=resume,
+            epochs=args.epochs, resume=resume, seed=seed,
         )
     else:
         ddir = args.data_dir or os.path.join(RAW_DIR, "figshare")
         ensure_datasets(download_figshare=True, download_brats=False)
         if track == "detection":
             train_detection(
-                data_dir=ddir, epochs=args.epochs, resume=resume,
+                data_dir=ddir, epochs=args.epochs, resume=resume, seed=seed,
                 patient_level=args.patient_level,
             )
         elif track == "classifier":
             train_classifier(
-                data_dir=ddir, epochs=args.epochs, resume=resume,
+                data_dir=ddir, epochs=args.epochs, resume=resume, seed=seed,
                 patient_level=args.patient_level,
             )
         elif track == "gan":
             train_gan(
                 data_dir=ddir, gan_type=args.gan_type,
-                epochs=args.epochs, resume=resume,
+                epochs=args.epochs, resume=resume, seed=seed,
             )
         else:  # pragma: no cover - argparse restricts the choices
             raise ValueError(f"Unknown track: {track}")

@@ -20,7 +20,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-GPU_MEMORY_GB = float(os.getenv("GPU_MEMORY_GB", "0") or 0)
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+GPU_MEMORY_GB = _env_float("GPU_MEMORY_GB", 0)
 LOW_VRAM_MODE = _env_flag("LOW_VRAM_MODE", default=bool(GPU_MEMORY_GB and GPU_MEMORY_GB <= 4))
 RUNTIME_PROFILE = "low_vram" if LOW_VRAM_MODE else "default"
 GAN_IMAGE_SIZE = _env_int("GAN_IMAGE_SIZE", 64 if LOW_VRAM_MODE else 128)

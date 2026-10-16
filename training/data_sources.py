@@ -51,7 +51,7 @@ def ensure_datasets(download_figshare=True, download_brats=True):
                         "Figshare download did not produce f"
                         "iles; manual download may be needed"
                     )
-            except BaseException as e:
+            except Exception as e:
                 logger.info(f'Figshare direct download failed: {e}')
                 logger.info('Trying Kaggle fallback...')
                 try:
@@ -60,7 +60,7 @@ def ensure_datasets(download_figshare=True, download_brats=True):
                         logger.info('Kaggle fallback download complete')
                     else:
                         logger.info('Kaggle fallback finished but no files found')
-                except BaseException as ke:
+                except Exception as ke:
                     logger.info(f'Kaggle fallback failed: {ke}')
                     logger.info(
                         "Please manually place Figshare/Kagg"
@@ -82,7 +82,7 @@ def ensure_datasets(download_figshare=True, download_brats=True):
                         "BraTS download did not produce fi"
                         "les; manual download may be needed"
                     )
-            except BaseException as e:
+            except Exception as e:
                 logger.info(f'BraTS auto-download failed: {e}')
                 logger.info('Please manually place BraTS under data/raw/brats')
         else:

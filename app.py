@@ -18,7 +18,6 @@ from config import (
     NUM_CLASSES,
     PROJECT_NAME,
     WEIGHTS_DIR,
-    ensure_directories,
 )
 from preprocessing import (
     preprocess_classifier,
@@ -63,6 +62,18 @@ def _load_detection_config() -> dict:
         if config_path.exists():
             with config_path.open("r", encoding="utf-8") as handle:
                 return json.load(handle)
+    msg = (
+        "No detection inference config found in "
+        f"{[str(p) for p in DETECTION_CONFIG_CANDIDATES]}; "
+        "falling back to the uncalibrated threshold 0.5. "
+        "Screening is running at the wrong operating point — provide the "
+        "calibrated config before relying on decisions."
+    )
+    logger.warning(msg)
+    if st.runtime.exists():
+        # Only in a real app session: st.* calls are inert in bare mode and
+        # must not fire during tests, which exercise this fallback directly.
+        st.warning(f"⚠️ {msg}")
     return {"threshold": 0.5, "validation_metrics": {}}
 
 
@@ -381,7 +392,11 @@ def render_research_extensions() -> None:
 
 def main() -> None:
     st.set_page_config(page_title=PROJECT_NAME, layout="wide")
-    ensure_directories()
+    # Inference-only entry point: do NOT call ensure_directories() here. The
+    # deployment runs with a read-only root filesystem
+    # (docker-compose.yml / k8s/deployment.yaml), and creating the training
+    # output dirs at startup raises PermissionError and crash-loops the app.
+    # The app only reads weights/configs and writes nothing.
     detection_config = _load_detection_config()
     core_models = load_core_models()
 

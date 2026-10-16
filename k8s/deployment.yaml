@@ -22,8 +22,11 @@ spec:
       labels:
         app: mri-intelligence
       annotations:
-        # Roll the deployment when the pinned image tag changes.
-        checksum/config: "replace-with-configmap-hash-on-release"
+        # Roll the deployment when the pinned image tag changes, and when the
+        # ConfigMap data changes. Refresh this to the sha256 of
+        # k8s/configmap.yaml whenever that file is edited, so pods pick up
+        # new env (e.g. flipping LOW_VRAM_MODE) without a manual restart.
+        checksum/config: "sha256:a038af6aa9f649d22a7fd48c062db63f9b2678e3e0b58ad2f894653b9a71c357"
     spec:
       terminationGracePeriodSeconds: 30
       securityContext:

@@ -51,7 +51,8 @@ def train_gan_v2(data_dir=None, epochs=None, fid_eval_freq=10, resume=True,
     """Train the v2 WGAN-GP under a float32 policy that is always restored."""
     with float32_precision():
         return _train_gan_v2_impl(
-            data_dir=data_dir, epochs=epochs, fid_eval_freq=fid_eval_freq, resume=resume
+            data_dir=data_dir, epochs=epochs, fid_eval_freq=fid_eval_freq, resume=resume,
+            seed=seed,
         )
 
 

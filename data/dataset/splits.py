@@ -98,6 +98,23 @@ def _stratified_split(
     )
 
 
+def _safe_extract(archive: zipfile.ZipFile, target_dir: Path) -> None:
+    """Extract a zip archive, refusing entries that escape ``target_dir``.
+
+    Guards against ZipSlip: a crafted archive member such as ``../../evil``
+    or an absolute path would otherwise be written outside the dataset
+    directory when ``extractall`` is used unchecked.
+    """
+    base = target_dir.resolve()
+    for member in archive.infolist():
+        member_path = (base / member.filename).resolve()
+        if member_path != base and base not in member_path.parents:
+            raise ValueError(
+                f"Refusing to extract unsafe zip member: {member.filename!r}"
+            )
+        archive.extract(member, base)
+
+
 def download_dataset(name: str) -> Path:
     """Download and extract a supported dataset into data/raw."""
     if name not in DATASET_CONFIG:
@@ -113,7 +130,7 @@ def download_dataset(name: str) -> Path:
         urllib.request.urlretrieve(url, archive_path)
         try:
             with zipfile.ZipFile(archive_path, "r") as archive:
-                archive.extractall(target_dir)
+                _safe_extract(archive, target_dir)
         finally:
             archive_path.unlink(missing_ok=True)
         return target_dir
